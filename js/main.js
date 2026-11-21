@@ -275,6 +275,14 @@ async function boot() {
 
   const settings = await getSettings()
   document.documentElement.dataset.quality = settings.quality
+
+  clearTimeout(window.__bootWatch)
+  document.getElementById('boot-veil')?.remove()
+}
+
+function removeBootVeil() {
+  clearTimeout(window.__bootWatch)
+  document.getElementById('boot-veil')?.remove()
 }
 
 window.addEventListener('unhandledrejection', (event) => {
@@ -284,6 +292,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
 boot().catch((error) => {
   console.error(error)
+  removeBootVeil()
   document.body.append(
     el(
       'div',

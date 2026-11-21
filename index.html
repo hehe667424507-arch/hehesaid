@@ -20,6 +20,17 @@
     <link rel="stylesheet" href="css/app.css" />
   </head>
   <body>
+    <div id="boot-veil">
+      <p class="boot-title" id="boot-title">正在启动…</p>
+      <p class="boot-sub" id="boot-sub">第一次打开会慢一点，稍等几秒。</p>
+      <button class="boot-rescue" id="boot-rescue" type="button" hidden>
+        清掉网页缓存并重启
+      </button>
+      <p class="boot-tip" id="boot-tip" hidden>
+        这个操作只会清掉网页文件缓存，不会删掉你的题库。
+      </p>
+    </div>
+
     <div id="file-warning" hidden>
       <h1>请双击「启动.bat」来打开</h1>
       <p>
@@ -63,6 +74,42 @@
       if (location.protocol === 'file:') {
         document.getElementById('file-warning').hidden = false
         document.getElementById('app').hidden = true
+        document.getElementById('boot-veil').remove()
+      }
+
+      // 启动看门狗：不依赖任何模块脚本，JS 加载失败时也能用。
+      // 8 秒还没启动完，就把"清缓存重启"的按钮亮出来。
+      window.__bootWatch = setTimeout(function () {
+        var veil = document.getElementById('boot-veil')
+        if (!veil) return
+        document.getElementById('boot-title').textContent = '启动卡住了'
+        document.getElementById('boot-sub').textContent =
+          '可能是这个浏览器缓存了旧文件，清一下网页缓存再试。'
+        document.getElementById('boot-rescue').hidden = false
+        document.getElementById('boot-tip').hidden = false
+      }, 8000)
+
+      window.__rescueBoot = async function () {
+        var button = document.getElementById('boot-rescue')
+        button.disabled = true
+        button.textContent = '正在清理…'
+        try {
+          if ('serviceWorker' in navigator) {
+            var regs = await navigator.serviceWorker.getRegistrations()
+            for (var i = 0; i < regs.length; i += 1) await regs[i].unregister()
+          }
+        } catch (error) {}
+        try {
+          if ('caches' in window) {
+            var keys = await caches.keys()
+            for (var j = 0; j < keys.length; j += 1) await caches.delete(keys[j])
+          }
+        } catch (error) {}
+        location.reload()
+      }
+
+      document.getElementById('boot-rescue').onclick = function () {
+        window.__rescueBoot()
       }
     </script>
     <script src="vendor/jszip.min.js"></script>

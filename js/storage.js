@@ -11,14 +11,35 @@ const DIR_NAME = 'images'
 let mode = 'unknown'
 let dirHandle = null
 
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 export async function initStorage() {
   if (mode !== 'unknown') return mode
   try {
     if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
       throw new Error('当前浏览器没有文件系统接口')
     }
-    const root = await navigator.storage.getDirectory()
-    dirHandle = await root.getDirectoryHandle(DIR_NAME, { create: true })
+    // 有些浏览器（尤其手机 Edge）在这里会卡住不返回，超时就降级，绝不白屏。
+    const root = await withTimeout(navigator.storage.getDirectory(), 3000, 'OPFS 打开超时')
+    dirHandle = await withTimeout(
+      root.getDirectoryHandle(DIR_NAME, { create: true }),
+      3000,
+      'OPFS 目录创建超时',
+    )
     mode = 'opfs'
   } catch {
     dirHandle = null
@@ -69,7 +90,7 @@ export async function putImage(blob) {
   const bytes = blob.size
   const record = { id, bytes, at: Date.now() }
 
-  if (!dirHandle) {
+  if (!dirHandle || mode !== 'opfs') {
     await putOne('blobs', { id, blob })
     await putOne('images', { ...record, store: 'idb' })
     return { id, bytes, store: 'idb', degraded: mode === 'opfs' }
@@ -94,7 +115,7 @@ export async function getImageBlob(id) {
   const record = await getOne('images', id)
   const store = record ? record.store : null
 
-  if (store === 'opfs' || (store == null && dirHandle)) {
+  if (store === 'opfs' || (store == null && dirHandle && mode === 'opfs')) {
     try {
       return await readOpfs(id)
     } catch {
@@ -137,7 +158,7 @@ export async function imageBytesTotal() {
 /** 备份恢复时按原 id 写回图片，保持题目组里的引用不变。 */
 export async function restoreImage(id, blob) {
   const bytes = blob.size
-  if (dirHandle) {
+  if (dirHandle && mode === 'opfs') {
     try {
       await writeOpfs(id, blob)
       await putOne('images', { id, bytes, at: Date.now(), store: 'opfs' })

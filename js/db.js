@@ -53,9 +53,14 @@ export function openDB() {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
     let request
+    // 浏览器卡住不返回时，别让应用一直空白。
+    const timer = setTimeout(() => {
+      reject(new Error('本地数据库打开超时，可能是这个浏览器限制了存储'))
+    }, 8000)
     try {
       request = indexedDB.open(DB_NAME, DB_VERSION)
     } catch (error) {
+      clearTimeout(timer)
       reject(error)
       return
     }
@@ -98,9 +103,18 @@ export function openDB() {
         migrateToV2(tx, subStore, groupsStore)
       }
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error || new Error('无法打开本地数据库'))
-    request.onblocked = () => reject(new Error('本地数据库被其他标签页占用，请关掉其它刷题页面后重试'))
+    request.onsuccess = () => {
+      clearTimeout(timer)
+      resolve(request.result)
+    }
+    request.onerror = () => {
+      clearTimeout(timer)
+      reject(request.error || new Error('无法打开本地数据库'))
+    }
+    request.onblocked = () => {
+      clearTimeout(timer)
+      reject(new Error('本地数据库被其他标签页占用，请关掉其它刷题页面后重试'))
+    }
   })
   return dbPromise
 }
