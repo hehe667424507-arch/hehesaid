@@ -1,12 +1,17 @@
-// 应用入口：类目选择、统计、四个页面的切换。
+// 应用入口：大类目 / 小类目选择、统计、四个页面的切换。
 
 import { el, toast, askText } from './ui.js'
 import { initStorage, storageMode } from './storage.js'
 import {
+  ALL_SUBCATEGORIES,
   ensureDefaultCategory,
   listCategories,
   createCategory,
   deleteCategory,
+  listSubcategories,
+  subcategoryGroupCounts,
+  createSubcategory,
+  deleteSubcategory,
   categoryStats,
   getSettings,
 } from './repo.js'
@@ -15,9 +20,11 @@ import { createIngestView } from './ingest.js'
 import { createListsView } from './lists.js'
 import { createSettingsView } from './settings.js'
 
-const STORAGE_KEY = 'quiz.currentCategory'
+const KEY_CATEGORY = 'quiz.currentCategory'
+const KEY_SUBCATEGORY = 'quiz.currentSubcategory'
 
 const categorySelect = document.getElementById('categorySelect')
+const subcategorySelect = document.getElementById('subcategorySelect')
 const addCategoryBtn = document.getElementById('btnAddCategory')
 const statsBox = document.getElementById('stats')
 const tabBar = document.getElementById('tabbar')
@@ -29,7 +36,9 @@ const sections = {
 }
 
 let categories = []
-let currentCategoryId = localStorage.getItem(STORAGE_KEY) || null
+let subcategories = []
+let currentCategoryId = localStorage.getItem(KEY_CATEGORY) || null
+let currentSubcategoryId = localStorage.getItem(KEY_SUBCATEGORY) || ALL_SUBCATEGORIES
 let activeTab = 'quiz'
 let views = {}
 
@@ -37,13 +46,29 @@ function getCategoryId() {
   return currentCategoryId
 }
 
+function getSubcategoryId() {
+  return currentSubcategoryId
+}
+
+function currentCategoryName() {
+  const row = categories.find((item) => item.id === currentCategoryId)
+  return row ? row.name : ''
+}
+
+function currentSubcategoryName() {
+  const row = subcategories.find((item) => item.id === currentSubcategoryId)
+  return row ? row.name : ''
+}
+
 async function refreshStats() {
   if (!currentCategoryId) {
-    statsBox.replaceChildren(el('span', { class: 'stat', text: '还没有类目' }))
+    statsBox.replaceChildren(el('span', { class: 'stat', text: '还没有大类目' }))
     return
   }
-  const stats = await categoryStats(currentCategoryId)
+  const stats = await categoryStats(currentCategoryId, currentSubcategoryId)
+  const scope = currentSubcategoryId ? currentSubcategoryName() : '全部小类目'
   statsBox.replaceChildren(
+    el('span', { class: 'stat stat-scope', title: `统计范围：${scope}`, text: scope }),
     el('span', { class: 'stat' }, el('b', { text: String(stats.new) }), ' 未看'),
     el('span', { class: 'stat' }, el('b', { text: String(stats.wrong) }), ' 错题'),
     el('span', { class: 'stat' }, el('b', { text: String(stats.done) }), ' 已做对'),
@@ -55,19 +80,45 @@ function renderCategorySelect() {
     ...categories.map((row) => el('option', { value: row.id, text: row.name })),
   )
   if (!categories.length) {
-    categorySelect.append(el('option', { value: '', text: '（还没有类目）' }))
+    categorySelect.append(el('option', { value: '', text: '（还没有大类目）' }))
   }
   if (!currentCategoryId || !categories.some((row) => row.id === currentCategoryId)) {
     currentCategoryId = categories[0] ? categories[0].id : null
-    if (currentCategoryId) localStorage.setItem(STORAGE_KEY, currentCategoryId)
+    localStorage.setItem(KEY_CATEGORY, currentCategoryId || '')
   }
   if (currentCategoryId) categorySelect.value = currentCategoryId
+}
+
+function renderSubcategorySelect() {
+  const options = [el('option', { value: ALL_SUBCATEGORIES, text: '全部小类目' })]
+  for (const row of subcategories) {
+    options.push(el('option', { value: row.id, text: row.name }))
+  }
+  if (!subcategories.length) {
+    options.push(el('option', { value: '', text: '（还没有小类目，去「录入」或「设置」里建）' }))
+  }
+  subcategorySelect.replaceChildren(...options)
+  subcategorySelect.value = currentSubcategoryId || ALL_SUBCATEGORIES
+  subcategorySelect.disabled = !subcategories.length
 }
 
 async function reloadCategories() {
   categories = await listCategories()
   renderCategorySelect()
+  await reloadSubcategories()
   await refreshStats()
+}
+
+async function reloadSubcategories() {
+  subcategories = currentCategoryId ? await listSubcategories(currentCategoryId) : []
+  if (
+    currentSubcategoryId &&
+    !subcategories.some((row) => row.id === currentSubcategoryId)
+  ) {
+    currentSubcategoryId = ALL_SUBCATEGORIES
+    localStorage.setItem(KEY_SUBCATEGORY, '')
+  }
+  renderSubcategorySelect()
 }
 
 function setTab(name) {
@@ -84,39 +135,53 @@ function setTab(name) {
   }
 }
 
-async function onCategoryChanged() {
-  localStorage.setItem(STORAGE_KEY, currentCategoryId || '')
+async function reloadActiveView() {
+  const view = views[activeTab]
+  if (view && typeof view.reload === 'function') {
+    await view.reload().catch(() => {})
+  }
+}
+
+async function setSubcategoryId(id) {
+  currentSubcategoryId = id || ALL_SUBCATEGORIES
+  localStorage.setItem(KEY_SUBCATEGORY, currentSubcategoryId)
+  subcategorySelect.value = currentSubcategoryId || ALL_SUBCATEGORIES
+  await refreshStats()
+}
+
+async function onScopeChanged() {
+  localStorage.setItem(KEY_CATEGORY, currentCategoryId || '')
+  localStorage.setItem(KEY_SUBCATEGORY, currentSubcategoryId || '')
   await refreshStats()
   for (const [key, view] of Object.entries(views)) {
-    if (key !== 'settings' && typeof view.reload === 'function') {
-      await view.reload().catch(() => {})
-    }
+    if (key === 'settings') continue
+    if (typeof view.reload === 'function') await view.reload().catch(() => {})
   }
 }
 
 function buildViews() {
   const common = {
     getCategoryId,
+    getSubcategoryId,
     refreshStats,
+    refreshSubcategories: reloadSubcategories,
+    setSubcategoryId,
     onDataChanged: refreshStats,
     goQuiz: () => setTab('quiz'),
+    goSettings: () => setTab('settings'),
+    onScopeChanged,
   }
   views = {
     quiz: createQuizView(common),
     ingest: createIngestView(common),
     lists: createListsView(common),
     settings: createSettingsView({
-      onDataChanged: refreshAll,
+      ...common,
       refreshAll: async () => {
         await reloadCategories()
         if (views.quiz) await views.quiz.reload().catch(() => {})
         if (views.lists) await views.lists.reload().catch(() => {})
         await refreshStats()
-      },
-      onCategoriesChanged: async () => {
-        await reloadCategories()
-        if (views.quiz) await views.quiz.reload().catch(() => {})
-        if (views.lists) await views.lists.reload().catch(() => {})
       },
     }),
   }
@@ -126,13 +191,8 @@ function buildViews() {
   }
 }
 
-async function refreshAll() {
-  await refreshStats()
-}
-
 async function boot() {
   // 尽早注册 Service Worker：它负责让应用壳离线可用、让手机能装到主屏幕。
-  // 不能等 load 事件——模块脚本执行时 load 可能已经过去了。
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {
       // 注册失败不影响正常使用，只是不能离线打开。
@@ -146,24 +206,37 @@ async function boot() {
 
   categories = await ensureDefaultCategory()
   renderCategorySelect()
+  await reloadSubcategories()
 
   buildViews()
 
   categorySelect.addEventListener('change', async () => {
     currentCategoryId = categorySelect.value || null
-    await onCategoryChanged()
+    // 换大类目时小类目回到「全部」，避免看到别的类目的选项。
+    currentSubcategoryId = ALL_SUBCATEGORIES
+    await reloadSubcategories()
+    await onScopeChanged()
+    await reloadActiveView()
+  })
+
+  subcategorySelect.addEventListener('change', async () => {
+    currentSubcategoryId = subcategorySelect.value || ALL_SUBCATEGORIES
+    await onScopeChanged()
+    await reloadActiveView()
   })
 
   addCategoryBtn.addEventListener('click', async () => {
-    const name = await askText('新建类目', { placeholder: '比如：数学、竞赛、英语' })
+    const name = await askText('新建大类目', { placeholder: '比如：数学、竞赛、英语' })
     if (!name) return
     try {
       const category = await createCategory(name)
       await reloadCategories()
       currentCategoryId = category.id
+      currentSubcategoryId = ALL_SUBCATEGORIES
       categorySelect.value = category.id
-      await onCategoryChanged()
-      toast(`已新建「${category.name}」`, 'ok')
+      await onScopeChanged()
+      await reloadActiveView()
+      toast(`已新建大类目「${category.name}」，记得在「设置」里加小类目`, 'ok')
     } catch (error) {
       toast(error.message || '新建失败', 'error')
     }
@@ -178,7 +251,6 @@ async function boot() {
   await refreshStats()
   setTab('quiz')
 
-  document.body.classList.add('ready')
   const settings = await getSettings()
   document.documentElement.dataset.quality = settings.quality
 }
@@ -203,18 +275,45 @@ boot().catch((error) => {
   )
 })
 
-// 供设置页删除类目后复用。
+// 供设置页复用。
 window.__quizApp = {
   reloadCategories,
+  reloadSubcategories,
+  getCategoryId,
+  getSubcategoryId,
   get currentCategoryId() {
     return currentCategoryId
+  },
+  get currentSubcategoryId() {
+    return currentSubcategoryId
+  },
+  async listCategories() {
+    return listCategories()
+  },
+  async listSubcategories(categoryId) {
+    return listSubcategories(categoryId)
+  },
+  async subcategoryCounts(categoryId) {
+    return subcategoryGroupCounts(categoryId)
+  },
+  async createSubcategory(categoryId, name) {
+    const sub = await createSubcategory(categoryId, name)
+    await reloadSubcategories()
+    await refreshStats()
+    return sub
+  },
+  async deleteSubcategory(subId) {
+    const result = await deleteSubcategory(subId)
+    await reloadSubcategories()
+    await refreshStats()
+    return result
   },
   async deleteCategoryById(id) {
     await deleteCategory(id)
     await reloadCategories()
-    await onCategoryChanged()
+    await onScopeChanged()
   },
-  async listCategories() {
-    return listCategories()
+  async refreshStats() {
+    await refreshStats()
   },
 }

@@ -1,6 +1,6 @@
 // 设置页：清晰度档位、存储占用、导出/导入备份、安装到主屏幕。
 
-import { el, toast, dialog, confirmDialog, formatBytes } from './ui.js'
+import { el, toast, dialog, confirmDialog, askText, formatBytes } from './ui.js'
 import { PRESETS } from './image.js'
 import { getSettings, saveSettings } from './repo.js'
 import { initStorage, storageModeLabel, imageBytesTotal } from './storage.js'
@@ -109,43 +109,111 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
     const app = window.__quizApp
     if (!app) return
     const rows = await app.listCategories()
-    categoriesBox.replaceChildren(
-      ...rows.map((row) =>
+    if (!rows.length) {
+      categoriesBox.replaceChildren(
+        el('div', { class: 'hint', text: '还没有大类目，回顶部点「＋」新建一个。' }),
+      )
+      return
+    }
+
+    const blocks = []
+    for (const row of rows) {
+      const [subs, counts] = await Promise.all([
+        app.listSubcategories(row.id),
+        app.subcategoryCounts(row.id),
+      ])
+
+      const subRows = subs.map((sub) =>
         el(
           'div',
-          { class: 'kv' },
-          el('span', { text: row.name }),
+          { class: 'sub-row' },
+          el('span', { class: 'sub-name', text: sub.name }),
+          el('span', { class: 'sub-count', text: `${counts.get(sub.id) || 0} 题` }),
+          el('button', {
+            class: 'btn btn-sm btn-danger-ghost',
+            text: '删除',
+            onclick: async () => {
+              const ok = await confirmDialog(
+                `删除小类目「${sub.name}」？它下面的题目会自动挪到同一个大类目的其它小类目里，不会丢。`,
+                { title: '删除小类目', okText: '删除', danger: true },
+              )
+              if (!ok) return
+              try {
+                const result = await app.deleteSubcategory(sub.id)
+                toast(result.moved ? `已删除，${result.moved} 道题已挪走` : '已删除', 'ok')
+                await renderCategories()
+                await renderStorage()
+              } catch (error) {
+                toast(error.message || '删除失败', 'error')
+              }
+            },
+          }),
+        ),
+      )
+
+      blocks.push(
+        el(
+          'div',
+          { class: 'cat-block' },
           el(
-            'span',
-            { class: 'kv-actions' },
-            el('span', {
-              class: 'kv-tag',
-              text: app.currentCategoryId === row.id ? '当前' : '',
-            }),
-            el('button', {
-              class: 'btn btn-sm btn-danger-ghost',
-              text: '删除',
-              onclick: async () => {
-                const ok = await confirmDialog(
-                  `删除类目「${row.name}」？这个类目下的所有题目和图片都会一起删除，不能恢复。`,
-                  { title: '删除类目', okText: '删除', danger: true },
-                )
-                if (!ok) return
-                try {
-                  await app.deleteCategoryById(row.id)
-                  toast('已删除类目', 'ok')
-                  await renderCategories()
-                  await renderStorage()
-                } catch (error) {
-                  toast(error.message || '删除失败', 'error')
-                }
-              },
-            }),
+            'div',
+            { class: 'cat-row' },
+            el('span', { class: 'cat-name', text: row.name }),
+            app.currentCategoryId === row.id ? el('span', { class: 'kv-tag', text: '当前' }) : null,
+            el(
+              'span',
+              { class: 'cat-actions' },
+              el('button', {
+                class: 'btn btn-sm',
+                text: '＋ 小类目',
+                onclick: async () => {
+                  const name = await askText('新建小类目', {
+                    placeholder: '比如：第一章 极限、第二章 导数',
+                  })
+                  if (!name) return
+                  try {
+                    await app.createSubcategory(row.id, name)
+                    toast(`已创建小类目「${name}」`, 'ok')
+                    await renderCategories()
+                  } catch (error) {
+                    toast(error.message || '创建失败', 'error')
+                  }
+                },
+              }),
+              el('button', {
+                class: 'btn btn-sm btn-danger-ghost',
+                text: '删除大类目',
+                onclick: async () => {
+                  const ok = await confirmDialog(
+                    `删除大类目「${row.name}」？它下面的所有小类目、题目和图片都会一起删除，不能恢复。`,
+                    { title: '删除大类目', okText: '删除', danger: true },
+                  )
+                  if (!ok) return
+                  try {
+                    await app.deleteCategoryById(row.id)
+                    toast('已删除大类目', 'ok')
+                    await renderCategories()
+                    await renderStorage()
+                  } catch (error) {
+                    toast(error.message || '删除失败', 'error')
+                  }
+                },
+              }),
+            ),
+          ),
+          el(
+            'div',
+            { class: 'sub-list' },
+            ...subRows,
+            subs.length
+              ? null
+              : el('div', { class: 'hint', text: '还没有小类目，先点右上「＋ 小类目」建一个。' }),
           ),
         ),
-      ),
-      rows.length ? null : el('div', { class: 'hint', text: '还没有类目，回顶部点「＋ 类目」新建一个。' }),
-    )
+      )
+    }
+
+    categoriesBox.replaceChildren(...blocks)
   }
 
   async function renderStorage() {
@@ -177,7 +245,7 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
       })
       exportStatus.textContent =
         `已导出 ${result.filename}（${formatBytes(result.bytes)}，` +
-        `${result.groups} 道题 / ${result.images} 张图）` +
+        `${result.categories} 个大类目 / ${result.subcategories} 个小类目 / ${result.groups} 道题 / ${result.images} 张图）` +
         (result.missingImages ? `，有 ${result.missingImages} 张图找不到，未包含在内` : '')
       toast('备份已开始下载', 'ok')
     } catch (error) {
@@ -222,7 +290,7 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
       })
       importStatus.textContent =
         `导入完成（${mode === 'merge' ? '合并' : '覆盖'}）：` +
-        `${result.categories} 个类目 / ${result.groups} 道题 / ${result.images} 张图` +
+        `${result.categories} 个大类目 / ${result.subcategories} 个小类目 / ${result.groups} 道题 / ${result.images} 张图` +
         (result.failedImages ? `，${result.failedImages} 张图恢复失败` : '')
       toast('导入完成', 'ok')
       await renderStorage()

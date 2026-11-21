@@ -5,7 +5,7 @@
 //   - 断网 / 网很差：用缓存里的旧版，不白屏
 // 比「缓存优先」更适合这个项目：文件总共才 100 多 KB，网络优先不会慢。
 
-const CACHE = 'picture-quiz-v2'
+const CACHE = 'picture-quiz-v3'
 
 const SHELL = [
   './',
@@ -17,6 +17,7 @@ const SHELL = [
   './js/storage.js',
   './js/image.js',
   './js/viewer.js',
+  './js/crop.js',
   './js/repo.js',
   './js/quiz.js',
   './js/ingest.js',
@@ -24,6 +25,8 @@ const SHELL = [
   './js/settings.js',
   './js/backup.js',
   './vendor/jszip.min.js',
+  './vendor/cropper.min.js',
+  './vendor/cropper.min.css',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

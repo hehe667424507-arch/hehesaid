@@ -1,22 +1,52 @@
-// 录入页：① 逐题确认录入  ② 批量选图后手动分题。都不做任何识别。
+// 录入页：① 逐题确认录入（支持拍照 + 裁剪）  ② 批量选图后手动分题。
+// 两种入口都要先选一个小类目，题目会挂在这个小类目下。
 
-import { el, toast, confirmDialog } from './ui.js'
+import { el, toast, confirmDialog, askText } from './ui.js'
 import { PRESETS, compressImage, BIG_FILE_BYTES } from './image.js'
-import { createGroup, deleteGroup, getSettings, listGroups, saveImageBlob } from './repo.js'
+import {
+  createGroup,
+  createSubcategory,
+  deleteGroup,
+  getSettings,
+  listGroups,
+  listSubcategories,
+  saveImageBlob,
+} from './repo.js'
 import { deleteImage } from './storage.js'
+import { openCropper } from './crop.js'
 
 const NOTICE =
-  '请先在手机相册中裁剪好题目图和解析图，再分别选择；本应用不做自动切题和文字识别。'
+  '请先在手机相册中裁剪好题目图和解析图，再分别选择；本应用不做自动切题和文字识别。也可以直接「拍照」，拍完在裁剪框里框出题目区域。'
 
-export function createIngestView({ getCategoryId, refreshStats, onDataChanged, goQuiz }) {
-  let mode = 'one' // one | batch
+export function createIngestView({
+  getCategoryId,
+  getSubcategoryId,
+  refreshStats,
+  onDataChanged,
+  goQuiz,
+  refreshSubcategories,
+  setSubcategoryId,
+}) {
+  let mode = 'one'
+  let subcategories = []
+  let selectedSubcategoryId = ''
+  let savedCount = 0
+
+  const subChips = el('div', { class: 'chips' })
+  const subBar = el(
+    'div',
+    { class: 'sub-bar' },
+    el('span', { class: 'sub-bar-label', text: '录到' }),
+    subChips,
+  )
+
   const body = el('div', { class: 'ingest-body' })
 
   const tabOne = el('button', { class: 'seg-btn active', text: '逐题录入', onclick: () => switchMode('one') })
   const tabBatch = el('button', { class: 'seg-btn', text: '批量分题', onclick: () => switchMode('batch') })
   const tabs = el('div', { class: 'seg' }, tabOne, tabBatch)
 
-  const root = el('div', { class: 'ingest' }, el('div', { class: 'notice', text: NOTICE }), tabs, body)
+  const root = el('div', { class: 'ingest' }, el('div', { class: 'notice', text: NOTICE }), subBar, tabs, body)
 
   let viewOne = null
   let viewBatch = null
@@ -41,6 +71,97 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
     }
   }
 
+  async function loadSubcategories() {
+    const categoryId = getCategoryId()
+    subcategories = categoryId ? await listSubcategories(categoryId) : []
+    const preferred = getSubcategoryId()
+    const exists = subcategories.some((row) => row.id === selectedSubcategoryId)
+    if (!exists) {
+      selectedSubcategoryId = subcategories.some((row) => row.id === preferred)
+        ? preferred
+        : subcategories[0]
+          ? subcategories[0].id
+          : ''
+    }
+    renderSubBar()
+  }
+
+  function renderSubBar() {
+    if (!subcategories.length) {
+      subChips.replaceChildren(
+        el(
+          'div',
+          { class: 'no-sub' },
+          el('span', { class: 'no-sub-text', text: '这个大类目还没有小类目，先建一个：' }),
+          (() => {
+            const input = el('input', {
+              class: 'input input-inline',
+              type: 'text',
+              placeholder: '比如：第一章 极限',
+              maxlength: '30',
+            })
+            const button = el('button', {
+              class: 'btn btn-sm btn-primary',
+              text: '创建',
+              onclick: async () => {
+                try {
+                  const sub = await createSubcategory(getCategoryId(), input.value)
+                  selectedSubcategoryId = sub.id
+                  await loadSubcategories()
+                  await refreshSubcategories?.()
+                  await setSubcategoryId?.(sub.id)
+                  toast(`已创建小类目「${sub.name}」`, 'ok')
+                } catch (error) {
+                  toast(error.message || '创建失败', 'error')
+                }
+              },
+            })
+            input.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter') button.click()
+            })
+            return el('div', { class: 'no-sub-create' }, input, button)
+          })(),
+        ),
+      )
+      return
+    }
+
+    subChips.replaceChildren(
+      ...subcategories.map((row) =>
+        el('button', {
+          class: `chip ${row.id === selectedSubcategoryId ? 'active' : ''}`,
+          text: row.name,
+          onclick: async () => {
+            selectedSubcategoryId = row.id
+            renderSubBar()
+            // 顶部的「看哪个范围」跟着一起走，录完切到刷题就是这个小类目。
+            await setSubcategoryId?.(row.id)
+          },
+        }),
+      ),
+      el('button', {
+        class: 'chip chip-add',
+        text: '＋ 小类目',
+        onclick: async () => {
+          const name = await askText('新建小类目', {
+            placeholder: '比如：第一章 极限、第二章 导数',
+          })
+          if (!name) return
+          try {
+            const sub = await createSubcategory(getCategoryId(), name)
+            selectedSubcategoryId = sub.id
+            await loadSubcategories()
+            await refreshSubcategories?.()
+            await setSubcategoryId?.(sub.id)
+            toast(`已创建「${sub.name}」`, 'ok')
+          } catch (error) {
+            toast(error.message || '创建失败', 'error')
+          }
+        },
+      }),
+    )
+  }
+
   // ———————————————— 共用：保存一组题 ————————————————
 
   async function askKeepOriginal(info, index, total) {
@@ -53,13 +174,10 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
     return answer ? info.originalFile : info.blob
   }
 
-  /**
-   * 压缩并保存一组题。返回 group。
-   * onProgress(text)
-   */
   async function persistGroup(questionFile, explanationFiles, onProgress = () => {}) {
     const categoryId = getCategoryId()
-    if (!categoryId) throw new Error('请先在顶部选择一个类目')
+    if (!categoryId) throw new Error('请先在顶部选择大类目')
+    if (!selectedSubcategoryId) throw new Error('请先选择小类目')
     const settings = await getSettings()
     const preset = settings.quality
     const total = 1 + explanationFiles.length
@@ -88,6 +206,7 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
 
       const group = await createGroup({
         categoryId,
+        subcategoryId: selectedSubcategoryId,
         questionImageId: savedIds[0],
         explanationImageIds: explanationIds,
       })
@@ -104,14 +223,39 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
     }
   }
 
+  /** 拍照 → 裁剪 → 交给回调。用户取消就什么都不做。 */
+  async function captureAndCrop(input, title, onReady, onStatus = () => {}) {
+    const file = input.files && input.files[0]
+    input.value = ''
+    if (!file) return
+    onStatus('正在处理照片…')
+    try {
+      const cropped = await openCropper(file, { title })
+      onStatus('')
+      if (!cropped) return
+      onReady(new File([cropped], 'photo.jpg', { type: 'image/jpeg' }))
+    } catch (error) {
+      onStatus('')
+      toast(error.message || '裁剪失败', 'error')
+    }
+  }
+
+  function captureInput(label) {
+    return el('input', {
+      type: 'file',
+      accept: 'image/*',
+      capture: 'environment',
+      hidden: true,
+      'aria-label': label,
+    })
+  }
+
   // ———————————————— 入口 A：逐题确认录入 ————————————————
 
   function buildEntryOne() {
-    let question = null // { file, url }
-    let explanations = [] // [{ file, url }]
-    let savedCount = 0
+    let question = null
+    let explanations = []
     let lastGroup = null
-    let saving = false
 
     const qThumbs = el('div', { class: 'thumbs' })
     const eThumbs = el('div', { class: 'thumbs' })
@@ -120,6 +264,8 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
 
     const qInput = el('input', { type: 'file', accept: 'image/*', hidden: true })
     const eInput = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true })
+    const qCamera = captureInput('拍照录入题目')
+    const eCamera = captureInput('拍照录入解析')
 
     qInput.addEventListener('change', () => {
       const file = qInput.files && qInput.files[0]
@@ -130,6 +276,22 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
       renderThumbs()
     })
 
+    qCamera.addEventListener('change', () =>
+      captureAndCrop(
+        qCamera,
+        '裁剪题目',
+        (file) => {
+          if (question) URL.revokeObjectURL(question.url)
+          question = { file, url: URL.createObjectURL(file) }
+          renderThumbs()
+          toast('已加入题目图，可以继续拍或直接保存', 'ok')
+        },
+        (text) => {
+          status.textContent = text
+        },
+      ),
+    )
+
     eInput.addEventListener('change', () => {
       const files = Array.from(eInput.files || [])
       eInput.value = ''
@@ -137,19 +299,37 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
       renderThumbs()
     })
 
+    eCamera.addEventListener('change', () =>
+      captureAndCrop(
+        eCamera,
+        '裁剪解析',
+        (file) => {
+          explanations.push({ file, url: URL.createObjectURL(file) })
+          renderThumbs()
+          toast('已加入一张解析', 'ok')
+        },
+        (text) => {
+          status.textContent = text
+        },
+      ),
+    )
+
     const saveBtn = el('button', { class: 'btn btn-primary btn-xl', text: '本题录入完成，下一题' })
 
     saveBtn.addEventListener('click', async () => {
-      if (saving) return
+      if (saveBtn.disabled) return
       if (!getCategoryId()) {
-        toast('请先在顶部选择一个类目', 'error')
+        toast('请先在顶部选择大类目', 'error')
+        return
+      }
+      if (!selectedSubcategoryId) {
+        toast('请先选择小类目（上面的「录到」）', 'error')
         return
       }
       if (!question) {
         toast('还没选题目图', 'error')
         return
       }
-      saving = true
       saveBtn.disabled = true
       try {
         const group = await persistGroup(question.file, explanations.map((row) => row.file), (text) => {
@@ -157,7 +337,6 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
         })
         lastGroup = group
         savedCount += 1
-        // 清空当前题，保留类目，进入下一题。
         URL.revokeObjectURL(question.url)
         question = null
         for (const row of explanations) URL.revokeObjectURL(row.url)
@@ -172,7 +351,6 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
         status.textContent = ''
         toast(error.message || '保存失败，请重试', 'error')
       } finally {
-        saving = false
         saveBtn.disabled = false
       }
     })
@@ -195,7 +373,7 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
               },
             }),
           )
-          : el('div', { class: 'thumb-empty', text: '还没有选题目图' }),
+          : el('div', { class: 'thumb-empty', text: '还没有题目图' }),
       )
       eThumbs.replaceChildren(
         ...explanations.map((row, index) =>
@@ -226,8 +404,12 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
 
     async function refreshCounter() {
       const categoryId = getCategoryId()
-      const total = categoryId ? (await listGroups(categoryId)).length : 0
-      counter.textContent = `本次已录入 ${savedCount} 题 · 当前类目共 ${total} 题`
+      const all = categoryId ? await listGroups(categoryId) : []
+      const mine = selectedSubcategoryId
+        ? all.filter((group) => group.subcategoryId === selectedSubcategoryId).length
+        : 0
+      const total = all.length
+      counter.textContent = `本次已录入 ${savedCount} 题 · 当前小类目 ${mine} 题 · 大类目共 ${total} 题`
     }
 
     const el_ = el(
@@ -235,6 +417,8 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
       { class: 'entry-one' },
       qInput,
       eInput,
+      qCamera,
+      eCamera,
       el(
         'div',
         { class: 'pick-block' },
@@ -242,7 +426,12 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
           'div',
           { class: 'pick-head' },
           el('span', { class: 'pick-title', text: '① 题目图（1 张）' }),
-          el('button', { class: 'btn btn-sm', text: '选择题目图', onclick: () => qInput.click() }),
+          el(
+            'div',
+            { class: 'row row-tight' },
+            el('button', { class: 'btn btn-sm', text: '📷 拍照', onclick: () => qCamera.click() }),
+            el('button', { class: 'btn btn-sm', text: '相册选择', onclick: () => qInput.click() }),
+          ),
         ),
         qThumbs,
       ),
@@ -252,8 +441,13 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
         el(
           'div',
           { class: 'pick-head' },
-          el('span', { class: 'pick-title', text: '② 解析图（0 张或多张，按选择顺序）' }),
-          el('button', { class: 'btn btn-sm', text: '添加解析图', onclick: () => eInput.click() }),
+          el('span', { class: 'pick-title', text: '② 解析图（0 张或多张，按顺序）' }),
+          el(
+            'div',
+            { class: 'row row-tight' },
+            el('button', { class: 'btn btn-sm', text: '📷 拍照', onclick: () => eCamera.click() }),
+            el('button', { class: 'btn btn-sm', text: '相册选择', onclick: () => eInput.click() }),
+          ),
         ),
         eThumbs,
       ),
@@ -316,10 +510,9 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
   // ———————————————— 入口 B：批量选图手动分题 ————————————————
 
   function buildEntryBatch() {
-    /** items: { file, url, role: 'none'|'question'|'explanation', groupNo } */
     let items = []
-    let current = null // { questionIndex, explanationIndexes: [], startIndex }
-    let history = [] // 操作栈：{ type:'question'|'explanation', index } 或 { type:'save', group, indexRange }
+    let current = null
+    let history = []
     let savedGroups = []
     let saving = false
 
@@ -471,7 +664,6 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
               return
             }
             if (last.type === 'save') {
-              // 回退一次保存：把这道题从数据库删掉，图片一起删。
               deleteGroup(last.group.id)
                 .then(async () => {
                   savedGroups.pop()
@@ -558,7 +750,12 @@ export function createIngestView({ getCategoryId, refreshStats, onDataChanged, g
   return {
     el: root,
     async onShow() {
+      await loadSubcategories()
       render()
+    },
+    async reload() {
+      await loadSubcategories()
+      if (viewOne) viewOne.refresh()
     },
   }
 }

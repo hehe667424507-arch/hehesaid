@@ -1,10 +1,12 @@
 // 导出 / 导入备份。备份是一个 zip：backup.json + images/*.jpg（含图片本身）。
+// v2 起 backup.json 里多了 subcategories；导入旧备份时会自动补一个「未分类」。
 
 import { dumpData, replaceAllData, mergeData } from './repo.js'
 import { getImageBlob, restoreImage, listImages, deleteImage } from './storage.js'
 
 const APP_TAG = 'picture-quiz'
-const BACKUP_VERSION = 1
+const BACKUP_VERSION = 2
+const FALLBACK = '未分类'
 
 function getZip() {
   const zip = window.JSZip
@@ -40,9 +42,36 @@ function download(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
-/**
- * 导出完整备份（含图片）。onProgress(done, total) 可选。
- */
+/** 老备份（没有 subcategories）在这里补齐，保证每道题都有归属。 */
+function normalizeManifest(manifest) {
+  let subcategories = Array.isArray(manifest.subcategories) ? [...manifest.subcategories] : []
+  let groups = Array.isArray(manifest.groups) ? [...manifest.groups] : []
+
+  if (!subcategories.length) {
+    subcategories = (manifest.categories || []).map((category) => ({
+      id: `sub_${category.id}_default`,
+      categoryId: category.id,
+      name: FALLBACK,
+      createdAt: category.createdAt || Date.now(),
+      isDefault: true,
+    }))
+  }
+
+  const subById = new Map(subcategories.map((sub) => [sub.id, sub]))
+  const firstSubOfCategory = new Map()
+  for (const sub of subcategories) {
+    if (!firstSubOfCategory.has(sub.categoryId)) firstSubOfCategory.set(sub.categoryId, sub.id)
+  }
+
+  groups = groups.map((group) => {
+    if (group.subcategoryId && subById.has(group.subcategoryId)) return group
+    const fallback = firstSubOfCategory.get(group.categoryId)
+    return fallback ? { ...group, subcategoryId: fallback } : group
+  })
+
+  return { categories: manifest.categories || [], subcategories, groups, settings: manifest.settings }
+}
+
 export async function exportBackup(onProgress = () => {}) {
   const JSZip = getZip()
   const data = await dumpData()
@@ -54,6 +83,7 @@ export async function exportBackup(onProgress = () => {}) {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     categories: data.categories,
+    subcategories: data.subcategories,
     groups: data.groups,
     settings: data.settings,
   }
@@ -63,15 +93,17 @@ export async function exportBackup(onProgress = () => {}) {
   let missing = 0
   for (const id of ids) {
     const blob = await getImageBlob(id)
-    if (blob) zip.file(`images/${id}.jpg`, blob)
-    else missing += 1
+    if (blob) {
+      zip.file(`images/${id}.jpg`, blob)
+    } else {
+      missing += 1
+    }
     done += 1
     onProgress(done, ids.length)
   }
 
-  const out = await zip.generateAsync(
-    { type: 'blob', compression: 'STORE' },
-    (meta) => onProgress(ids.length, ids.length, meta.percent),
+  const out = await zip.generateAsync({ type: 'blob', compression: 'STORE' }, (meta) =>
+    onProgress(ids.length, ids.length, meta.percent),
   )
 
   const filename = `刷题备份-${timestampName()}.zip`
@@ -82,6 +114,7 @@ export async function exportBackup(onProgress = () => {}) {
     bytes: out.size,
     groups: data.groups.length,
     categories: data.categories.length,
+    subcategories: data.subcategories.length,
     images: ids.length - missing,
     missingImages: missing,
   }
@@ -114,7 +147,7 @@ async function readManifest(file) {
     throw new Error('备份里的 backup.json 不是有效的 JSON')
   }
   validateManifest(manifest)
-  return { zip, manifest }
+  return { zip, manifest: normalizeManifest(manifest) }
 }
 
 /**
@@ -137,13 +170,9 @@ export async function importBackup(file, mode, onProgress = () => {}) {
         // 忽略删不掉的旧图。
       }
     }
-    await replaceAllData({
-      categories: manifest.categories,
-      groups: manifest.groups,
-      settings: manifest.settings,
-    })
+    await replaceAllData(manifest)
   } else {
-    await mergeData({ categories: manifest.categories, groups: manifest.groups })
+    await mergeData(manifest)
   }
 
   const needed = new Set(referencedImageIds(manifest.groups))
@@ -153,7 +182,6 @@ export async function importBackup(file, mode, onProgress = () => {}) {
 
   for (const name of imageEntries) {
     const id = name.slice('images/'.length).replace(/\.jpg$/i, '')
-    // 合并模式下只补当前题库真正引用的图片。
     if (mode === 'merge' && !needed.has(id)) {
       done += 1
       continue
@@ -172,6 +200,7 @@ export async function importBackup(file, mode, onProgress = () => {}) {
   return {
     mode,
     categories: manifest.categories.length,
+    subcategories: manifest.subcategories.length,
     groups: manifest.groups.length,
     images: restored,
     failedImages: failed,
