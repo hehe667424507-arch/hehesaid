@@ -193,10 +193,32 @@ function buildViews() {
 
 async function boot() {
   // 尽早注册 Service Worker：它负责让应用壳离线可用、让手机能装到主屏幕。
+  // updateViaCache:'none' 让浏览器每次都去核对 sw.js，不被 HTTP 缓存挡住。
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {
-      // 注册失败不影响正常使用，只是不能离线打开。
+    const hadController = Boolean(navigator.serviceWorker.controller)
+    let reloading = false
+
+    // 新版本接管并开始控制页面时，自动刷新一次，这样更新完打开就是新版，
+    // 不用用户自己去清缓存。首次安装不会触发刷新。
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return
+      reloading = true
+      location.reload()
     })
+
+    navigator.serviceWorker
+      .register('sw.js', { updateViaCache: 'none' })
+      .then((registration) => {
+        const check = () => registration.update().catch(() => {})
+        // 回到前台时、以及每小时检查一次有没有新版本。
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') check()
+        })
+        setInterval(check, 60 * 60 * 1000)
+      })
+      .catch(() => {
+        // 注册失败不影响正常使用，只是不能离线打开。
+      })
   }
 
   await initStorage()

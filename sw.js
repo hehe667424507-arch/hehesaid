@@ -5,7 +5,7 @@
 //   - 断网 / 网很差：用缓存里的旧版，不白屏
 // 比「缓存优先」更适合这个项目：文件总共才 100 多 KB，网络优先不会慢。
 
-const CACHE = 'picture-quiz-v3'
+const CACHE = 'picture-quiz-v4'
 
 const SHELL = [
   './',
