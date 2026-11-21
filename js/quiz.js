@@ -3,6 +3,7 @@
 
 import { el, toast, confirmDialog } from './ui.js'
 import { createShot } from './viewer.js'
+import { openFullscreen } from './fullscreen.js'
 import {
   STATUS,
   listGroups,
@@ -33,15 +34,17 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   const revealRow = el('div', { class: 'row', hidden: true }, revealBtn)
   const navRow = el('div', { class: 'row row-nav' }, backBtn, hint)
 
+  const drawRow = el(
+    'div',
+    { class: 'row' },
+    drawBtn,
+    el('label', { class: 'switch' }, wrongOnlyInput, el('span', { text: '只抽错题' })),
+  )
+
   const bar = el(
     'div',
     { class: 'quiz-bar' },
-    el(
-      'div',
-      { class: 'row' },
-      drawBtn,
-      el('label', { class: 'switch' }, wrongOnlyInput, el('span', { text: '只抽错题' })),
-    ),
+    drawRow,
     revealRow,
     judgeRow,
     navRow,
@@ -92,6 +95,8 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   function setJudgeVisible(visible) {
     judgeRow.hidden = !visible
     revealRow.hidden = !visible || revealed
+    // 已经在做题时把「抽一题」那一行收起来，给长图多留 60 像素。
+    drawRow.hidden = visible
   }
 
   function setReviewMode(on) {
@@ -161,7 +166,9 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
       return
     }
     objectUrls.push(url)
-    const shot = createShot()
+    const shot = createShot({
+      onTap: () => openFullscreen(url, { title: '题目' }),
+    })
     shot.setSrc(url)
 
     const subName = currentSubcategoryName(group)

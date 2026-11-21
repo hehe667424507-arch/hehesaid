@@ -1,4 +1,4 @@
-// 录入页：① 逐题确认录入（支持拍照 + 裁剪）  ② 批量选图后手动分题。
+// 录入页：① 逐题确认录入（支持拍照 + 裁剪 + 涂抹）  ② 批量选图后手动分题（点选方式）。
 // 两种入口都要先选一个小类目，题目会挂在这个小类目下。
 
 import { el, toast, confirmDialog, askText } from './ui.js'
@@ -89,39 +89,37 @@ export function createIngestView({
 
   function renderSubBar() {
     if (!subcategories.length) {
+      const input = el('input', {
+        class: 'input input-inline',
+        type: 'text',
+        placeholder: '比如：第一章 极限',
+        maxlength: '30',
+      })
+      const button = el('button', {
+        class: 'btn btn-sm btn-primary',
+        text: '创建',
+        onclick: async () => {
+          try {
+            const sub = await createSubcategory(getCategoryId(), input.value)
+            selectedSubcategoryId = sub.id
+            await loadSubcategories()
+            await refreshSubcategories?.()
+            await setSubcategoryId?.(sub.id)
+            toast(`已创建小类目「${sub.name}」`, 'ok')
+          } catch (error) {
+            toast(error.message || '创建失败', 'error')
+          }
+        },
+      })
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') button.click()
+      })
       subChips.replaceChildren(
         el(
           'div',
           { class: 'no-sub' },
           el('span', { class: 'no-sub-text', text: '这个大类目还没有小类目，先建一个：' }),
-          (() => {
-            const input = el('input', {
-              class: 'input input-inline',
-              type: 'text',
-              placeholder: '比如：第一章 极限',
-              maxlength: '30',
-            })
-            const button = el('button', {
-              class: 'btn btn-sm btn-primary',
-              text: '创建',
-              onclick: async () => {
-                try {
-                  const sub = await createSubcategory(getCategoryId(), input.value)
-                  selectedSubcategoryId = sub.id
-                  await loadSubcategories()
-                  await refreshSubcategories?.()
-                  await setSubcategoryId?.(sub.id)
-                  toast(`已创建小类目「${sub.name}」`, 'ok')
-                } catch (error) {
-                  toast(error.message || '创建失败', 'error')
-                }
-              },
-            })
-            input.addEventListener('keydown', (event) => {
-              if (event.key === 'Enter') button.click()
-            })
-            return el('div', { class: 'no-sub-create' }, input, button)
-          })(),
+          el('div', { class: 'no-sub-create' }, input, button),
         ),
       )
       return
@@ -382,14 +380,47 @@ export function createIngestView({
       }
     }
 
-    function doodleButton(row, title) {
+    async function cropThumb(row, isQuestion) {
+      if (!row) return
+      try {
+        const blobs = await openCropper(row.file, { title: '裁剪这一张' })
+        if (!blobs || !blobs.length) return
+        URL.revokeObjectURL(row.url)
+        row.file = new File([blobs[0]], 'crop.jpg', { type: 'image/jpeg' })
+        row.url = URL.createObjectURL(row.file)
+
+        if (blobs.length > 1) {
+          const extra = blobs.slice(1).map((blob) => {
+            const file = new File([blob], 'crop.jpg', { type: 'image/jpeg' })
+            return { file, url: URL.createObjectURL(file) }
+          })
+          if (isQuestion) {
+            explanations.push(...extra)
+          } else {
+            const index = explanations.indexOf(row)
+            explanations.splice(index + 1, 0, ...extra)
+          }
+        }
+        renderThumbs()
+        toast(
+          blobs.length > 1
+            ? `这张裁成了 ${blobs.length} 块${isQuestion ? '，其余已加入解析' : ''}`
+            : '已更新这一张',
+          'ok',
+        )
+      } catch (error) {
+        toast(error.message || '裁剪失败', 'error')
+      }
+    }
+
+    function thumbTool(className, text, title, handler) {
       return el('button', {
-        class: 'thumb-doodle',
-        text: '✎',
+        class: className,
+        text,
         title,
         onclick: (event) => {
           event.stopPropagation()
-          doodleThumb(row)
+          handler()
         },
       })
     }
@@ -402,7 +433,8 @@ export function createIngestView({
             'div',
             { class: 'thumb' },
             el('img', { src: currentQuestion.url, alt: '' }),
-            doodleButton(currentQuestion, '涂抹题目图上的笔迹'),
+            thumbTool('thumb-crop', '✂', '裁剪 / 旋转', () => cropThumb(currentQuestion, true)),
+            thumbTool('thumb-doodle', '✎', '涂抹题目图上的笔迹', () => doodleThumb(currentQuestion)),
             el('button', {
               class: 'thumb-del',
               text: '×',
@@ -423,7 +455,8 @@ export function createIngestView({
             { class: 'thumb' },
             el('img', { src: row.url, alt: '' }),
             el('span', { class: 'thumb-index', text: String(index + 1) }),
-            doodleButton(row, '涂抹这张解析图上的笔迹'),
+            thumbTool('thumb-crop', '✂', '裁剪 / 旋转', () => cropThumb(row, false)),
+            thumbTool('thumb-doodle', '✎', '涂抹这张解析图上的笔迹', () => doodleThumb(row)),
             el('button', {
               class: 'thumb-del',
               text: '×',
@@ -450,8 +483,7 @@ export function createIngestView({
       const mine = selectedSubcategoryId
         ? all.filter((group) => group.subcategoryId === selectedSubcategoryId).length
         : 0
-      const total = all.length
-      counter.textContent = `本次已录入 ${savedCount} 题 · 当前小类目 ${mine} 题 · 大类目共 ${total} 题`
+      counter.textContent = `本次已录入 ${savedCount} 题 · 当前小类目 ${mine} 题 · 大类目共 ${all.length} 题`
     }
 
     const el_ = el(
@@ -549,18 +581,20 @@ export function createIngestView({
     }
   }
 
-  // ———————————————— 入口 B：批量选图手动分题 ————————————————
+  // ———————————————— 入口 B：批量选图手动分题（点选方式） ————————————————
 
   function buildEntryBatch() {
+    /** items: { file, url, role: 'none'|'question'|'explanation', groupNo, saved } */
     let items = []
-    let current = null
-    let history = []
+    const selected = new Set()
+    let selectOrder = []
+    let current = { question: null, explanations: [] }
     let savedGroups = []
     let saving = false
 
     const strip = el('div', { class: 'batch-strip' })
     const status = el('div', { class: 'ingest-status', text: '' })
-    const cursorInfo = el('div', { class: 'ingest-meta', text: '先选择一批图片' })
+    const info = el('div', { class: 'ingest-meta', text: '先选择一批图片' })
     const fileInput = el('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true })
 
     fileInput.addEventListener('change', () => {
@@ -568,29 +602,129 @@ export function createIngestView({
       fileInput.value = ''
       if (!files.length) return
       for (const file of files) {
-        items.push({ file, url: URL.createObjectURL(file), role: 'none', groupNo: null })
+        items.push({ file, url: URL.createObjectURL(file), role: 'none', groupNo: null, saved: false })
       }
-      current = null
-      history = []
       renderStrip()
     })
 
-    function cursorIndex() {
-      return items.findIndex((item) => item.role === 'none')
+    const btnQuestion = el('button', { class: 'btn btn-primary', text: '设为题目', disabled: true })
+    const btnExplain = el('button', { class: 'btn', text: '加入解析', disabled: true })
+    const btnDelete = el('button', { class: 'btn btn-danger-ghost', text: '删除选中', disabled: true })
+    const btnFinish = el('button', { class: 'btn btn-ok btn-block', text: '本题结束并保存', disabled: true })
+    const btnCancel = el('button', { class: 'btn', text: '取消当前组' })
+    const btnDropSaved = el('button', { class: 'btn btn-danger-ghost', text: '删除刚保存的组' })
+
+    function clearSelection() {
+      selected.clear()
+      selectOrder = []
     }
 
-    function nextFree() {
-      return cursorIndex()
-    }
-
-    async function editCrop(index) {
-      if (saving) return
-      if (current) {
-        toast('先把当前这组标记完，或点「取消当前组」，再来编辑', 'info')
+    function toggle(item) {
+      if (item.saved) {
+        toast('这张已经保存到题库了，不能在这里改', 'info')
         return
       }
-      const item = items[index]
-      if (!item) return
+      if (selected.has(item)) {
+        selected.delete(item)
+        selectOrder = selectOrder.filter((row) => row !== item)
+      } else {
+        selected.add(item)
+        selectOrder.push(item)
+      }
+      renderStrip()
+    }
+
+    function updateButtons() {
+      btnQuestion.disabled = selected.size !== 1
+      btnExplain.disabled = selected.size === 0
+      btnDelete.disabled = selected.size === 0
+      btnFinish.disabled = !current.question
+      btnCancel.disabled = !current.question && current.explanations.length === 0
+      btnDropSaved.disabled = savedGroups.length === 0
+    }
+
+    function updateInfo() {
+      const total = items.length
+      if (!total) {
+        info.textContent = '先选择一批图片'
+        return
+      }
+      const parts = []
+      if (selected.size) parts.push(`已选 ${selected.size} 张`)
+      if (current.question) parts.push(`题目：第 ${items.indexOf(current.question) + 1} 张`)
+      if (current.explanations.length) parts.push(`解析 ${current.explanations.length} 张`)
+      const done = items.filter((item) => item.saved).length
+      if (done) parts.push(`已保存 ${done} 张`)
+      info.textContent = parts.length
+        ? `共 ${total} 张 · ${parts.join(' · ')}`
+        : `共 ${total} 张 · 点图片选中，再用下面的按钮分配`
+    }
+
+    function roleLabel(item) {
+      if (item.saved) return '已保存'
+      if (item.role === 'question') return '题目'
+      if (item.role === 'explanation') {
+        const index = current.explanations.indexOf(item)
+        return `解析${index >= 0 ? index + 1 : ''}`
+      }
+      return ''
+    }
+
+    function renderStrip() {
+      strip.replaceChildren(
+        ...items.map((item) =>
+          el(
+            'div',
+            {
+              class: `batch-item ${item.role !== 'none' || item.saved ? 'set' : ''} ${
+                selected.has(item) ? 'selected' : ''
+              } ${item.saved ? 'saved' : ''}`,
+              onclick: () => toggle(item),
+            },
+            el('img', { src: item.url, alt: '', loading: 'lazy' }),
+            el('button', {
+              class: 'batch-tool batch-crop',
+              text: '✂',
+              title: '裁剪 / 旋转',
+              onclick: (event) => {
+                event.stopPropagation()
+                editCrop(item)
+              },
+            }),
+            el('button', {
+              class: 'batch-tool batch-doodle',
+              text: '✎',
+              title: '涂掉笔迹',
+              onclick: (event) => {
+                event.stopPropagation()
+                editDoodle(item)
+              },
+            }),
+            el('span', {
+              class: `batch-badge ${item.role}`,
+              text: roleLabel(item) || String(items.indexOf(item) + 1),
+            }),
+          ),
+        ),
+      )
+      updateButtons()
+      updateInfo()
+    }
+
+    function resetCurrent() {
+      for (const item of [current.question, ...current.explanations]) {
+        if (item) item.role = 'none'
+      }
+      current = { question: null, explanations: [] }
+      clearSelection()
+    }
+
+    async function editCrop(item) {
+      if (saving) return
+      if (current.question || current.explanations.length) {
+        resetCurrent()
+        toast('已取消当前组，编辑完记得重新标记', 'info')
+      }
       try {
         const blobs = await openCropper(item.file, { title: '裁剪这一张' })
         if (!blobs || !blobs.length) return
@@ -600,11 +734,11 @@ export function createIngestView({
         item.role = 'none'
         item.groupNo = null
         if (blobs.length > 1) {
-          // 一页纸裁成多块：自动拆成多条，插在原位置后面。
           const extras = blobs.slice(1).map((blob) => {
             const file = new File([blob], 'crop.jpg', { type: 'image/jpeg' })
-            return { file, url: URL.createObjectURL(file), role: 'none', groupNo: null }
+            return { file, url: URL.createObjectURL(file), role: 'none', groupNo: null, saved: false }
           })
+          const index = items.indexOf(item)
           items.splice(index + 1, 0, ...extras)
         }
         renderStrip()
@@ -614,9 +748,12 @@ export function createIngestView({
       }
     }
 
-    async function editDoodle(index) {
-      const item = items[index]
-      if (!item) return
+    async function editDoodle(item) {
+      if (saving) return
+      if (current.question || current.explanations.length) {
+        resetCurrent()
+        toast('已取消当前组，编辑完记得重新标记', 'info')
+      }
       try {
         const edited = await openDoodle(item.file, { title: '涂掉笔迹' })
         if (!edited) return
@@ -630,106 +767,79 @@ export function createIngestView({
       }
     }
 
-    function renderStrip() {
-      const pending = nextFree()
-      strip.replaceChildren(
-        ...items.map((item, index) =>
-          el(
-            'div',
-            { class: `batch-item ${item.role === 'none' ? '' : 'set'} ${index === pending ? 'cursor' : ''}` },
-            el('img', { src: item.url, alt: '', loading: 'lazy' }),
-            el('button', {
-              class: 'batch-tool batch-crop',
-              text: '✂',
-              title: '裁剪 / 旋转',
-              onclick: (event) => {
-                event.stopPropagation()
-                editCrop(index)
-              },
-            }),
-            el('button', {
-              class: 'batch-tool batch-doodle',
-              text: '✎',
-              title: '涂掉笔迹',
-              onclick: (event) => {
-                event.stopPropagation()
-                editDoodle(index)
-              },
-            }),
-            el('span', {
-              class: `batch-badge ${item.role}`,
-              text:
-                item.role === 'question'
-                  ? `题目${item.groupNo}`
-                  : item.role === 'explanation'
-                    ? `解析${item.groupNo}`
-                    : String(index + 1),
-            }),
-          ),
-        ),
-      )
-      const remaining = items.filter((item) => item.role === 'none').length
-      if (!items.length) cursorInfo.textContent = '先选择一批图片'
-      else if (remaining === 0) cursorInfo.textContent = `全部 ${items.length} 张都分配完了`
-      else
-        cursorInfo.textContent = `下一张：第 ${pending + 1} 张（共 ${items.length} 张，还剩 ${remaining} 张）`
-      renderActions()
-    }
-
-    const btnQuestion = el('button', { class: 'btn btn-primary', text: '标记为题目' })
-    const btnExplanation = el('button', { class: 'btn', text: '标记为解析' })
-    const btnFinish = el('button', { class: 'btn btn-ok', text: '本题结束并保存' })
-    const actions = el('div', { class: 'batch-actions' }, btnQuestion, btnExplanation, btnFinish)
-
-    function renderActions() {
-      const index = nextFree()
-      const hasPending = index >= 0
-      btnQuestion.disabled = !hasPending || Boolean(current?.questionIndex != null)
-      btnExplanation.disabled = !hasPending || current?.questionIndex == null
-      btnFinish.disabled = current?.questionIndex == null
-    }
-
     btnQuestion.addEventListener('click', () => {
-      const index = nextFree()
-      if (index < 0) return
-      if (current && current.questionIndex != null) {
-        toast('当前组已经有题目了，先点「本题结束并保存」', 'info')
-        return
-      }
-      current = { questionIndex: index, explanationIndexes: [], startIndex: index }
-      items[index].role = 'question'
-      items[index].groupNo = savedGroups.length + 1
-      history.push({ type: 'question', index })
+      const [item] = [...selected]
+      if (!item) return
+      if (current.question && current.question !== item) current.question.role = 'none'
+      current.explanations = current.explanations.filter((row) => row !== item)
+      current.question = item
+      item.role = 'question'
+      clearSelection()
       renderStrip()
     })
 
-    btnExplanation.addEventListener('click', () => {
-      const index = nextFree()
-      if (index < 0 || !current) return
-      current.explanationIndexes.push(index)
-      items[index].role = 'explanation'
-      items[index].groupNo = savedGroups.length + 1
-      history.push({ type: 'explanation', index })
+    btnExplain.addEventListener('click', () => {
+      const picks = selectOrder.filter(
+        (item) =>
+          selected.has(item) &&
+          item !== current.question &&
+          !item.saved &&
+          !current.explanations.includes(item),
+      )
+      if (!picks.length) {
+        toast('先点选几张要当解析的图', 'info')
+        return
+      }
+      for (const item of picks) {
+        item.role = 'explanation'
+        current.explanations.push(item)
+      }
+      clearSelection()
+      renderStrip()
+      toast(`已加入 ${picks.length} 张解析`, 'ok')
+    })
+
+    btnDelete.addEventListener('click', () => {
+      const picks = [...selected]
+      if (!picks.length) return
+      const removable = picks.filter((item) => !item.saved)
+      if (removable.length !== picks.length) {
+        toast('已保存的图不能这样删，用「删除刚保存的组」', 'info')
+      }
+      for (const item of removable) {
+        URL.revokeObjectURL(item.url)
+        const index = items.indexOf(item)
+        if (index >= 0) items.splice(index, 1)
+        if (current.question === item) current.question = null
+        current.explanations = current.explanations.filter((row) => row !== item)
+        selected.delete(item)
+      }
+      selectOrder = selectOrder.filter((item) => !removable.includes(item))
       renderStrip()
     })
 
     btnFinish.addEventListener('click', async () => {
-      if (!current || saving) return
-      const questionItem = items[current.questionIndex]
-      const explanationItems = current.explanationIndexes.map((i) => items[i])
+      if (!current.question || saving) return
       saving = true
       btnFinish.disabled = true
+      const questionItem = current.question
+      const explanationItems = [...current.explanations]
       try {
         const group = await persistGroup(questionItem.file, explanationItems.map((item) => item.file), (text) => {
           status.textContent = text
         })
-        const range = [current.questionIndex, ...current.explanationIndexes]
-        for (const i of range) items[i].saved = true
-        savedGroups.push({ group, range })
-        history.push({ type: 'save', group, range, previous: { ...current } })
-        current = null
+        const groupNo = savedGroups.length + 1
+        const list = [questionItem, ...explanationItems]
+        for (const item of list) {
+          item.saved = true
+          item.groupNo = groupNo
+          item.role = 'none'
+        }
+        savedGroups.push({ group, items: list })
+        current = { question: null, explanations: [] }
+        clearSelection()
         status.textContent = ''
-        toast(`第 ${savedGroups.length} 组已保存`, 'ok')
+        toast(`第 ${groupNo} 组已保存`, 'ok')
         await refreshStats()
         await onDataChanged?.()
       } catch (error) {
@@ -737,6 +847,44 @@ export function createIngestView({
         toast(error.message || '保存失败，请重试', 'error')
       } finally {
         saving = false
+        renderStrip()
+      }
+    })
+
+    btnCancel.addEventListener('click', () => {
+      if (!current.question && !current.explanations.length) {
+        toast('当前没有正在分配的一组', 'info')
+        return
+      }
+      resetCurrent()
+      renderStrip()
+    })
+
+    btnDropSaved.addEventListener('click', async () => {
+      const last = savedGroups[savedGroups.length - 1]
+      if (!last) {
+        toast('还没有保存的组', 'info')
+        return
+      }
+      const ok = await confirmDialog('删除最后保存的那一组题？图片也会一起删除。', {
+        title: '删除题目组',
+        okText: '删除',
+        danger: true,
+      })
+      if (!ok) return
+      try {
+        await deleteGroup(last.group.id)
+        savedGroups.pop()
+        for (const item of last.items) {
+          item.saved = false
+          item.groupNo = null
+        }
+        toast('已删除', 'ok')
+        await refreshStats()
+        await onDataChanged?.()
+      } catch (error) {
+        toast(error.message || '删除失败', 'error')
+      } finally {
         renderStrip()
       }
     })
@@ -751,98 +899,16 @@ export function createIngestView({
         el('span', { class: 'pick-title', text: '② 一次选择一批图片' }),
         el('button', {
           class: 'btn btn-sm',
-          text: items.length ? '重新选择一批' : '选择一批图片',
+          text: items.length ? '再选一批' : '选择一批图片',
           onclick: () => fileInput.click(),
         }),
       ),
       strip,
-      cursorInfo,
-      actions,
+      info,
+      el('div', { class: 'batch-assign' }, btnQuestion, btnExplain, btnDelete),
+      btnFinish,
       status,
-      el(
-        'div',
-        { class: 'row' },
-        el('button', {
-          class: 'btn',
-          text: '回退一步',
-          onclick: () => {
-            const last = history.pop()
-            if (!last) {
-              toast('没有可回退的操作', 'info')
-              return
-            }
-            if (last.type === 'save') {
-              deleteGroup(last.group.id)
-                .then(async () => {
-                  savedGroups.pop()
-                  for (const i of last.range) items[i].saved = false
-                  current = last.previous
-                  toast('已删除刚保存的题', 'ok')
-                  await refreshStats()
-                  await onDataChanged?.()
-                })
-                .catch((error) => toast(error.message || '撤销失败', 'error'))
-                .finally(() => renderStrip())
-              return
-            }
-            const item = items[last.index]
-            item.role = 'none'
-            item.groupNo = null
-            if (last.type === 'question' && current) {
-              current = null
-            } else if (last.type === 'explanation' && current) {
-              current.explanationIndexes.pop()
-            }
-            renderStrip()
-          },
-        }),
-        el('button', {
-          class: 'btn',
-          text: '取消当前组',
-          onclick: () => {
-            if (!current) {
-              toast('当前没有正在分配的一组', 'info')
-              return
-            }
-            for (const index of [current.questionIndex, ...current.explanationIndexes]) {
-              items[index].role = 'none'
-              items[index].groupNo = null
-            }
-            history = history.filter((entry) => entry.type === 'save')
-            current = null
-            renderStrip()
-          },
-        }),
-        el('button', {
-          class: 'btn',
-          text: '删除刚保存的组',
-          onclick: async () => {
-            const last = savedGroups[savedGroups.length - 1]
-            if (!last) {
-              toast('还没有保存的组', 'info')
-              return
-            }
-            const ok = await confirmDialog('删除最后保存的那一组题？图片也会一起删除。', {
-              title: '删除题目组',
-              okText: '删除',
-              danger: true,
-            })
-            if (!ok) return
-            try {
-              await deleteGroup(last.group.id)
-              savedGroups.pop()
-              for (const i of last.range) items[i].saved = false
-              toast('已删除', 'ok')
-              await refreshStats()
-              await onDataChanged?.()
-            } catch (error) {
-              toast(error.message || '删除失败', 'error')
-            } finally {
-              renderStrip()
-            }
-          },
-        }),
-      ),
+      el('div', { class: 'row' }, btnCancel, btnDropSaved),
     )
 
     renderStrip()

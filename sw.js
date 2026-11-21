@@ -1,13 +1,15 @@
 // Service Worker：让手机装到主屏幕后离线也能打开，同时保证改版后一刷新就生效。
 //
-// 策略：同源请求一律「网络优先」，2.5 秒拿不到就用缓存。
-//   - 联网时：永远拿到最新文件（所以我改完代码，你刷新一次就是新版）
-//   - 断网 / 网很差：用缓存里的旧版，不白屏
-// 比「缓存优先」更适合这个项目：文件总共才 100 多 KB，网络优先不会慢。
+// 关键点：所有请求都带一个版本参数（?__v=...）。
+// GitHub Pages 的 CDN 是按完整 URL 缓存的，版本一变 URL 就变，
+// CDN 的旧副本就永远不会被用上 —— 这样就不会再出现「HTML 是新的、JS 还是旧的」。
+//
+// 策略：网络优先，2.5 秒拿不到就用缓存。
 
-const CACHE = 'picture-quiz-v6'
+const VERSION = 'v7'
+const CACHE = `picture-quiz-${VERSION}`
 
-const SHELL = [
+const SHELL_PATHS = [
   './',
   './index.html',
   './css/app.css',
@@ -19,8 +21,8 @@ const SHELL = [
   './js/viewer.js',
   './js/crop.js',
   './js/doodle.js',
+  './js/fullscreen.js',
   './js/preview.js',
-  './js/today.js',
   './js/thumb.js',
   './js/repo.js',
   './js/quiz.js',
@@ -37,13 +39,21 @@ const SHELL = [
   './icons/maskable-512.png',
 ]
 
+function versionedUrl(path) {
+  const url = new URL(path, self.location.href)
+  url.searchParams.set('__v', VERSION)
+  return url.href
+}
+
+const SHELL = SHELL_PATHS.map(versionedUrl)
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
       .then((cache) => cache.addAll(SHELL))
       .catch(() => {
-        // 某个文件没缓存上（例如路径写错）也不该让整个安装失败。
+        // 某个文件没缓存上也不该让整个安装失败。
       })
       .then(() => self.skipWaiting()),
   )
@@ -73,18 +83,18 @@ function offlinePage() {
 
 async function networkFirst(request) {
   const cache = await caches.open(CACHE)
+  const target = versionedUrl(request.url)
   try {
-    const response = await Promise.race([fetch(request), timeout(2500)])
+    const response = await Promise.race([fetch(target), timeout(2500)])
     if (response && response.ok) {
-      // 后台写缓存，不阻塞返回。
-      cache.put(request, response.clone()).catch(() => {})
+      cache.put(target, response.clone()).catch(() => {})
     }
     return response
   } catch {
-    const cached = await cache.match(request)
+    const cached = await cache.match(target)
     if (cached) return cached
     if (request.mode === 'navigate') {
-      const shell = await cache.match('./index.html')
+      const shell = await cache.match(versionedUrl('./index.html'))
       if (shell) return shell
       return offlinePage()
     }

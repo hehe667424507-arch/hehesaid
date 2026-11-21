@@ -1,5 +1,5 @@
-// 题库页：未看 / 错题 / 已做对 三个列表，按当前大类目 + 小类目筛选。
-// 缩略图懒加载并且按小尺寸解码，点开是预览（可改判、可存图）。
+// 题库页：今天 / 未看 / 错题 / 已做对 四个列表。
+// 除「今天」外都按当前大类目 + 小类目筛选；「今天」按大类目显示今天做过的题。
 
 import { el, toast, confirmDialog, formatTime } from './ui.js'
 import { openPreview } from './preview.js'
@@ -14,19 +14,34 @@ import {
 } from './repo.js'
 
 const TABS = [
+  { key: 'today', label: '今天' },
   { key: 'new', label: '未看' },
   { key: 'wrong', label: '错题' },
   { key: 'done', label: '已做对' },
 ]
 
+const RESULT_LABEL = { right: '做对', wrong: '做错', skip: '跳过' }
+
+function startOfToday() {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+function timeOf(ms) {
+  const date = new Date(ms)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 export function createListsView({ getCategoryId, getSubcategoryId, refreshStats, onDataChanged }) {
   let activeTab = 'new'
   let groups = []
+  let todayGroups = []
   let subcategoryNames = new Map()
   let observer = null
   const pending = new WeakMap()
 
-  const tabBar = el('div', { class: 'seg' })
+  const tabBar = el('div', { class: 'seg seg-4' })
   const listBox = el('div', { class: 'list-box' })
   const summary = el('div', { class: 'list-summary' })
 
@@ -58,10 +73,20 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
     return observer
   }
 
+  function thumbFor(group) {
+    const img = el('img', { class: 'thumb-img', alt: '', loading: 'lazy' })
+    pending.set(img, group.questionImageId)
+    ensureObserver().observe(img)
+    return img
+  }
+
   function renderTabs() {
     tabBar.replaceChildren(
       ...TABS.map((tab) => {
-        const count = groups.filter((group) => group.status === tab.key).length
+        const count =
+          tab.key === 'today'
+            ? todayGroups.length
+            : groups.filter((group) => group.status === tab.key).length
         return el('button', {
           class: `seg-btn ${activeTab === tab.key ? 'active' : ''}`,
           text: `${tab.label} ${count}`,
@@ -70,6 +95,7 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
             activeTab = tab.key
             renderTabs()
             renderList()
+            renderSummary()
           },
         })
       }),
@@ -84,17 +110,36 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
     })
   }
 
+  function todayItemFor(group) {
+    const subName = subcategoryNames.get(group.subcategoryId) || '未分类'
+    const statusText =
+      group.status === STATUS.DONE ? '已做对' : group.status === STATUS.WRONG ? '错题' : '未看'
+    return el(
+      'div',
+      { class: 'list-item', onclick: () => openItem(group) },
+      el('div', { class: 'thumb-frame' }, thumbFor(group)),
+      el(
+        'div',
+        { class: 'list-info' },
+        el('div', { class: 'list-title', text: subName }),
+        el('div', {
+          class: 'list-meta',
+          text: `${timeOf(group.lastAt)} · ${RESULT_LABEL[group.lastResult] || '—'} · ${statusText}`,
+        }),
+        el('div', { class: 'list-sub', text: `做过 ${group.attempts || 0} 次` }),
+      ),
+      el('span', { class: `today-badge ${group.lastResult || ''}`, text: RESULT_LABEL[group.lastResult] || '' }),
+    )
+  }
+
   function itemFor(group) {
     const explanationCount = (group.explanationImageIds || []).length
     const subName = subcategoryNames.get(group.subcategoryId) || '未分类'
-    const img = el('img', { class: 'thumb-img', alt: '', loading: 'lazy' })
-    pending.set(img, group.questionImageId)
-    ensureObserver().observe(img)
 
     return el(
       'div',
       { class: 'list-item' },
-      el('div', { class: 'thumb-frame', onclick: () => openItem(group) }, img),
+      el('div', { class: 'thumb-frame', onclick: () => openItem(group) }, thumbFor(group)),
       el(
         'div',
         { class: 'list-info', onclick: () => openItem(group) },
@@ -106,15 +151,7 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
         el('div', {
           class: 'list-sub',
           text: group.lastAt
-            ? `最后 ${formatTime(group.lastAt)} · ${
-                group.lastResult === 'right'
-                  ? '做对'
-                  : group.lastResult === 'wrong'
-                    ? '做错'
-                    : group.lastResult === 'skip'
-                      ? '跳过'
-                      : '—'
-              }`
+            ? `最后 ${formatTime(group.lastAt)} · ${RESULT_LABEL[group.lastResult] || '—'}`
             : '还没做过',
         }),
       ),
@@ -159,32 +196,36 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
     )
   }
 
+  function emptyState() {
+    const map = {
+      today: { emoji: '🌤️', title: '今天还没刷题', sub: '去「刷题」抽一题，做完就会出现在这里。' },
+      new: { emoji: '📥', title: '没有未看的题', sub: '去「录入」页加题，或者换个范围看看。' },
+      wrong: { emoji: '🎯', title: '没有错题，挺厉害', sub: '' },
+      done: { emoji: '✅', title: '还没有做对的题', sub: '' },
+    }
+    const item = map[activeTab]
+    return el(
+      'div',
+      { class: 'empty' },
+      el('div', { class: 'empty-emoji', text: item.emoji }),
+      el('p', { class: 'empty-title', text: item.title }),
+      item.sub ? el('p', { class: 'empty-sub', text: item.sub }) : null,
+    )
+  }
+
   function renderList() {
+    if (activeTab === 'today') {
+      if (!todayGroups.length) {
+        listBox.replaceChildren(emptyState())
+        return
+      }
+      listBox.replaceChildren(...todayGroups.map((group) => todayItemFor(group)))
+      return
+    }
+
     const filtered = groups.filter((group) => group.status === activeTab)
     if (!filtered.length) {
-      listBox.replaceChildren(
-        el(
-          'div',
-          { class: 'empty' },
-          el('div', {
-            class: 'empty-emoji',
-            text: activeTab === 'new' ? '📥' : activeTab === 'wrong' ? '🎯' : '✅',
-          }),
-          el('p', {
-            class: 'empty-title',
-            text:
-              activeTab === 'new'
-                ? '没有未看的题'
-                : activeTab === 'wrong'
-                  ? '没有错题，挺厉害'
-                  : '还没有做对的题',
-          }),
-          el('p', {
-            class: 'empty-sub',
-            text: activeTab === 'new' ? '去「录入」页加题，或者换个范围看看。' : '',
-          }),
-        ),
-      )
+      listBox.replaceChildren(emptyState())
       return
     }
     listBox.replaceChildren(...filtered.map((group) => itemFor(group)))
@@ -192,12 +233,21 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
 
   async function refreshAll() {
     const categoryId = getCategoryId()
-    const [rows, subs] = await Promise.all([
+    const [rangeGroups, categoryGroups, subs] = await Promise.all([
       categoryId ? listGroups(categoryId, getSubcategoryId()) : Promise.resolve([]),
+      categoryId ? listGroups(categoryId) : Promise.resolve([]),
       categoryId ? listSubcategories(categoryId) : Promise.resolve([]),
     ])
-    groups = rows
+
+    groups = rangeGroups
     subcategoryNames = new Map(subs.map((row) => [row.id, row.name]))
+
+    // 「今天」看整个大类目，不受小类目筛选影响。
+    const since = startOfToday()
+    todayGroups = categoryGroups
+      .filter((group) => (group.lastAt || 0) >= since)
+      .sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))
+
     renderTabs()
     renderList()
     await renderSummary()
@@ -211,6 +261,21 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
       summary.replaceChildren()
       return
     }
+
+    if (activeTab === 'today') {
+      const right = todayGroups.filter((group) => group.lastResult === 'right').length
+      const wrong = todayGroups.filter((group) => group.lastResult === 'wrong').length
+      const skipped = todayGroups.filter((group) => group.lastResult === 'skip').length
+      summary.replaceChildren(
+        el('span', {
+          text: todayGroups.length
+            ? `今天做了 ${todayGroups.length} 题 · 做对 ${right} · 做错 ${wrong} · 跳过 ${skipped}`
+            : '今天还没有记录',
+        }),
+      )
+      return
+    }
+
     const attempts = groups.reduce((sum, group) => sum + (group.attempts || 0), 0)
     const scope = getSubcategoryId()
       ? `小类目「${subcategoryNames.get(getSubcategoryId()) || '?'}」`

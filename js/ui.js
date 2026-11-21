@@ -22,18 +22,22 @@ export function el(tag, props = {}, ...children) {
   return node
 }
 
-let toastTimer = null
-
 export function toast(message, kind = 'info') {
   const box = document.getElementById('toasts')
   if (!box) return
+
+  // 最多同时留 3 条，旧的挤掉，避免糊满屏幕。
+  while (box.children.length >= 3) box.firstElementChild?.remove()
+
   const item = el('div', { class: `toast toast-${kind}`, text: message })
   box.append(item)
-  clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
+
+  // 每条提示用自己的定时器：连续弹好几条时，前面的不会被后面的取消。
+  const life = kind === 'error' ? 4200 : 2400
+  setTimeout(() => {
     item.classList.add('out')
     setTimeout(() => item.remove(), 260)
-  }, kind === 'error' ? 4200 : 2400)
+  }, life)
 }
 
 /**

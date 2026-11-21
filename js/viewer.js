@@ -19,9 +19,10 @@ function midpoint(a, b) {
 
 /**
  * 创建一张可缩放的长图。
+ * options.onTap: 单击（不是双击、不是在拖动）时调用，用来打开全屏。
  * 用法：const shot = createShot(); container.append(shot.el); shot.setSrc(url)
  */
-export function createShot() {
+export function createShot({ onTap } = {}) {
   const img = document.createElement('img')
   img.className = 'shot-img'
   img.alt = ''
@@ -33,6 +34,23 @@ export function createShot() {
   box.append(img)
 
   const state = { scale: 1, x: 0, y: 0, dragging: false, lastTap: 0 }
+  let tapTimer = null
+
+  function cancelTap() {
+    if (tapTimer) {
+      clearTimeout(tapTimer)
+      tapTimer = null
+    }
+  }
+
+  function scheduleTap() {
+    if (!onTap) return
+    cancelTap()
+    tapTimer = setTimeout(() => {
+      tapTimer = null
+      onTap()
+    }, 300)
+  }
 
   function paint() {
     img.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`
@@ -86,6 +104,7 @@ export function createShot() {
   }
 
   function reset() {
+    cancelTap()
     state.scale = 1
     state.x = 0
     state.y = 0
@@ -135,19 +154,26 @@ export function createShot() {
   box.addEventListener('pointerup', (event) => {
     if (state.dragging || state.moved) {
       state.lastTap = 0
+      cancelTap()
       return
     }
     if (event.pointerType === 'mouse' && event.button !== 0) return
     const now = Date.now()
     if (now - state.lastTap < 320) {
       state.lastTap = 0
+      cancelTap()
       zoomTo(state.scale > 1 ? 1 : DOUBLE_TAP_SCALE, { x: event.clientX, y: event.clientY })
     } else {
       state.lastTap = now
+      // 只有没放大时才把单击当成「打开全屏」，放大状态下单击留给拖动。
+      if (state.scale <= 1) scheduleTap()
     }
   })
 
-  box.addEventListener('dblclick', (event) => event.preventDefault())
+  box.addEventListener('dblclick', (event) => {
+    event.preventDefault()
+    cancelTap()
+  })
 
   // —— 双指捏合 ——
   let pinch = null
