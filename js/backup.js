@@ -8,12 +8,26 @@ const APP_TAG = 'picture-quiz'
 const BACKUP_VERSION = 2
 const FALLBACK = '未分类'
 
-function getZip() {
-  const zip = window.JSZip
-  if (!zip) {
-    throw new Error('打包组件没加载成功（vendor/jszip.min.js），请刷新页面后重试')
-  }
-  return zip
+let zipLoading = null
+
+/** 打包库按需加载：只有导入导出才用到，别拖慢首屏。 */
+function ensureZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip)
+  if (zipLoading) return zipLoading
+  zipLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'vendor/jszip.min.js'
+    script.onload = () => {
+      if (window.JSZip) resolve(window.JSZip)
+      else reject(new Error('打包组件没加载好'))
+    }
+    script.onerror = () => {
+      zipLoading = null
+      reject(new Error('打包组件下载失败，检查一下网络'))
+    }
+    document.head.append(script)
+  })
+  return zipLoading
 }
 
 function referencedImageIds(groups) {
@@ -73,7 +87,7 @@ function normalizeManifest(manifest) {
 }
 
 export async function exportBackup(onProgress = () => {}) {
-  const JSZip = getZip()
+  const JSZip = await ensureZip()
   const data = await dumpData()
   const zip = new JSZip()
 
@@ -130,7 +144,7 @@ function validateManifest(manifest) {
 }
 
 async function readManifest(file) {
-  const JSZip = getZip()
+  const JSZip = await ensureZip()
   let zip
   try {
     zip = await JSZip.loadAsync(file)

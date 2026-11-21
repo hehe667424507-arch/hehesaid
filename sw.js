@@ -6,7 +6,7 @@
 //
 // 策略：网络优先，2.5 秒拿不到就用缓存。
 
-const VERSION = 'v10'
+const VERSION = 'v11'
 const CACHE = `picture-quiz-${VERSION}`
 
 const SHELL_PATHS = [
@@ -68,10 +68,6 @@ self.addEventListener('activate', (event) => {
   )
 })
 
-function timeout(ms) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
-}
-
 function offlinePage() {
   return new Response(
     '<!doctype html><meta charset="utf-8"><title>离线</title>' +
@@ -84,22 +80,29 @@ function offlinePage() {
 async function networkFirst(request) {
   const cache = await caches.open(CACHE)
   const target = versionedUrl(request.url)
+
+  let response = null
   try {
-    const response = await Promise.race([fetch(target), timeout(2500)])
-    if (response && response.ok) {
-      cache.put(target, response.clone()).catch(() => {})
-    }
-    return response
+    // 不设人为超时：网络慢就慢慢等，绝不能因为慢就把脚本判死。
+    // 真的没网时 fetch 自己会失败，走下面的缓存兜底。
+    response = await fetch(target)
   } catch {
-    const cached = await cache.match(target)
-    if (cached) return cached
-    if (request.mode === 'navigate') {
-      const shell = await cache.match(versionedUrl('./index.html'))
-      if (shell) return shell
-      return offlinePage()
-    }
-    return new Response('', { status: 504, statusText: 'offline' })
+    response = null
   }
+
+  if (response) {
+    if (response.ok) cache.put(target, response.clone()).catch(() => {})
+    return response
+  }
+
+  const cached = await cache.match(target)
+  if (cached) return cached
+  if (request.mode === 'navigate') {
+    const shell = await cache.match(versionedUrl('./index.html'))
+    if (shell) return shell
+    return offlinePage()
+  }
+  return new Response('', { status: 504, statusText: 'offline' })
 }
 
 self.addEventListener('fetch', (event) => {

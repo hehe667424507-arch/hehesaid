@@ -11,6 +11,28 @@
 
 const CROP_MAX_EDGE = 2500
 
+let cropperLoading = null
+
+/** 裁剪库按需加载：首屏不用它，弱网下别让它拖慢启动。 */
+function ensureCropper() {
+  if (window.Cropper) return Promise.resolve(window.Cropper)
+  if (cropperLoading) return cropperLoading
+  cropperLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = 'vendor/cropper.min.js'
+    script.onload = () => {
+      if (window.Cropper) resolve(window.Cropper)
+      else reject(new Error('裁剪组件没加载好'))
+    }
+    script.onerror = () => {
+      cropperLoading = null
+      reject(new Error('裁剪组件下载失败，检查一下网络'))
+    }
+    document.head.append(script)
+  })
+  return cropperLoading
+}
+
 function canvasToBlob(canvas, quality) {
   return new Promise((resolve) => {
     canvas.toBlob((blob) => resolve(blob), 'image/jpeg', quality)
@@ -94,9 +116,9 @@ async function rotateBlob(blob, degrees) {
  * 返回 Blob 数组（可能多张）；用户取消返回 null。
  */
 export async function openCropper(sourceBlob, { title = '裁剪照片', maxEdge = CROP_MAX_EDGE } = {}) {
-  const Cropper = window.Cropper
+  const Cropper = await ensureCropper()
   if (!Cropper) {
-    throw new Error('裁剪组件没加载出来（vendor/cropper.min.js），请刷新页面重试')
+    throw new Error('裁剪组件没加载出来，请刷新页面重试')
   }
 
   const prepared = await downscaleForCrop(sourceBlob, maxEdge)
