@@ -14,6 +14,7 @@ import {
 } from './repo.js'
 import { deleteImage } from './storage.js'
 import { openCropper } from './crop.js'
+import { openDoodle } from './doodle.js'
 
 const NOTICE =
   '请先在手机相册中裁剪好题目图和解析图，再分别选择；本应用不做自动切题和文字识别。也可以直接「拍照」，拍完在裁剪框里框出题目区域。'
@@ -223,17 +224,17 @@ export function createIngestView({
     }
   }
 
-  /** 拍照 → 裁剪 → 交给回调。用户取消就什么都不做。 */
+  /** 拍照 → 裁剪（可连裁多块）→ 交给回调。用户取消就什么都不做。 */
   async function captureAndCrop(input, title, onReady, onStatus = () => {}) {
     const file = input.files && input.files[0]
     input.value = ''
     if (!file) return
     onStatus('正在处理照片…')
     try {
-      const cropped = await openCropper(file, { title })
+      const blobs = await openCropper(file, { title })
       onStatus('')
-      if (!cropped) return
-      onReady(new File([cropped], 'photo.jpg', { type: 'image/jpeg' }))
+      if (!blobs || !blobs.length) return
+      onReady(blobs.map((blob) => new File([blob], 'photo.jpg', { type: 'image/jpeg' })))
     } catch (error) {
       onStatus('')
       toast(error.message || '裁剪失败', 'error')
@@ -280,11 +281,20 @@ export function createIngestView({
       captureAndCrop(
         qCamera,
         '裁剪题目',
-        (file) => {
+        (files) => {
           if (question) URL.revokeObjectURL(question.url)
-          question = { file, url: URL.createObjectURL(file) }
+          question = { file: files[0], url: URL.createObjectURL(files[0]) }
+          const extra = files.slice(1)
+          for (const file of extra) {
+            explanations.push({ file, url: URL.createObjectURL(file) })
+          }
           renderThumbs()
-          toast('已加入题目图，可以继续拍或直接保存', 'ok')
+          toast(
+            extra.length
+              ? `裁出 ${files.length} 块：第 1 块作题目，其余 ${extra.length} 块已加入解析`
+              : '已加入题目图，可以继续拍或直接保存',
+            'ok',
+          )
         },
         (text) => {
           status.textContent = text
@@ -303,10 +313,12 @@ export function createIngestView({
       captureAndCrop(
         eCamera,
         '裁剪解析',
-        (file) => {
-          explanations.push({ file, url: URL.createObjectURL(file) })
+        (files) => {
+          for (const file of files) {
+            explanations.push({ file, url: URL.createObjectURL(file) })
+          }
           renderThumbs()
-          toast('已加入一张解析', 'ok')
+          toast(files.length > 1 ? `已加入 ${files.length} 张解析` : '已加入一张解析', 'ok')
         },
         (text) => {
           status.textContent = text
@@ -355,19 +367,48 @@ export function createIngestView({
       }
     })
 
+    async function doodleThumb(row) {
+      if (!row) return
+      try {
+        const edited = await openDoodle(row.file, { title: '涂掉笔迹' })
+        if (!edited) return
+        URL.revokeObjectURL(row.url)
+        row.file = new File([edited], 'edited.jpg', { type: 'image/jpeg' })
+        row.url = URL.createObjectURL(row.file)
+        renderThumbs()
+        toast('已更新这张图', 'ok')
+      } catch (error) {
+        toast(error.message || '涂抹失败', 'error')
+      }
+    }
+
+    function doodleButton(row, title) {
+      return el('button', {
+        class: 'thumb-doodle',
+        text: '✎',
+        title,
+        onclick: (event) => {
+          event.stopPropagation()
+          doodleThumb(row)
+        },
+      })
+    }
+
     function renderThumbs() {
+      const currentQuestion = question
       qThumbs.replaceChildren(
-        question
+        currentQuestion
           ? el(
             'div',
             { class: 'thumb' },
-            el('img', { src: question.url, alt: '' }),
+            el('img', { src: currentQuestion.url, alt: '' }),
+            doodleButton(currentQuestion, '涂抹题目图上的笔迹'),
             el('button', {
               class: 'thumb-del',
               text: '×',
               title: '移除题目图',
               onclick: () => {
-                URL.revokeObjectURL(question.url)
+                URL.revokeObjectURL(currentQuestion.url)
                 question = null
                 renderThumbs()
               },
@@ -382,6 +423,7 @@ export function createIngestView({
             { class: 'thumb' },
             el('img', { src: row.url, alt: '' }),
             el('span', { class: 'thumb-index', text: String(index + 1) }),
+            doodleButton(row, '涂抹这张解析图上的笔迹'),
             el('button', {
               class: 'thumb-del',
               text: '×',
@@ -541,6 +583,53 @@ export function createIngestView({
       return cursorIndex()
     }
 
+    async function editCrop(index) {
+      if (saving) return
+      if (current) {
+        toast('先把当前这组标记完，或点「取消当前组」，再来编辑', 'info')
+        return
+      }
+      const item = items[index]
+      if (!item) return
+      try {
+        const blobs = await openCropper(item.file, { title: '裁剪这一张' })
+        if (!blobs || !blobs.length) return
+        URL.revokeObjectURL(item.url)
+        item.file = new File([blobs[0]], 'crop.jpg', { type: 'image/jpeg' })
+        item.url = URL.createObjectURL(item.file)
+        item.role = 'none'
+        item.groupNo = null
+        if (blobs.length > 1) {
+          // 一页纸裁成多块：自动拆成多条，插在原位置后面。
+          const extras = blobs.slice(1).map((blob) => {
+            const file = new File([blob], 'crop.jpg', { type: 'image/jpeg' })
+            return { file, url: URL.createObjectURL(file), role: 'none', groupNo: null }
+          })
+          items.splice(index + 1, 0, ...extras)
+        }
+        renderStrip()
+        toast(blobs.length > 1 ? `拆成了 ${blobs.length} 张` : '已更新这一张', 'ok')
+      } catch (error) {
+        toast(error.message || '裁剪失败', 'error')
+      }
+    }
+
+    async function editDoodle(index) {
+      const item = items[index]
+      if (!item) return
+      try {
+        const edited = await openDoodle(item.file, { title: '涂掉笔迹' })
+        if (!edited) return
+        URL.revokeObjectURL(item.url)
+        item.file = new File([edited], 'edited.jpg', { type: 'image/jpeg' })
+        item.url = URL.createObjectURL(item.file)
+        renderStrip()
+        toast('已更新这一张', 'ok')
+      } catch (error) {
+        toast(error.message || '涂抹失败', 'error')
+      }
+    }
+
     function renderStrip() {
       const pending = nextFree()
       strip.replaceChildren(
@@ -549,6 +638,24 @@ export function createIngestView({
             'div',
             { class: `batch-item ${item.role === 'none' ? '' : 'set'} ${index === pending ? 'cursor' : ''}` },
             el('img', { src: item.url, alt: '', loading: 'lazy' }),
+            el('button', {
+              class: 'batch-tool batch-crop',
+              text: '✂',
+              title: '裁剪 / 旋转',
+              onclick: (event) => {
+                event.stopPropagation()
+                editCrop(index)
+              },
+            }),
+            el('button', {
+              class: 'batch-tool batch-doodle',
+              text: '✎',
+              title: '涂掉笔迹',
+              onclick: (event) => {
+                event.stopPropagation()
+                editDoodle(index)
+              },
+            }),
             el('span', {
               class: `batch-badge ${item.role}`,
               text:
@@ -564,7 +671,8 @@ export function createIngestView({
       const remaining = items.filter((item) => item.role === 'none').length
       if (!items.length) cursorInfo.textContent = '先选择一批图片'
       else if (remaining === 0) cursorInfo.textContent = `全部 ${items.length} 张都分配完了`
-      else cursorInfo.textContent = `下一张：第 ${pending + 1} 张（共 ${items.length} 张，还剩 ${remaining} 张）`
+      else
+        cursorInfo.textContent = `下一张：第 ${pending + 1} 张（共 ${items.length} 张，还剩 ${remaining} 张）`
       renderActions()
     }
 

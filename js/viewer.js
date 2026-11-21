@@ -100,7 +100,11 @@ export function createShot() {
     state.moved = false
     state.startX = event.clientX - state.x
     state.startY = event.clientY - state.y
-    box.setPointerCapture?.(event.pointerId)
+    try {
+      box.setPointerCapture(event.pointerId)
+    } catch {
+      // 合成事件或特殊环境不支持捕获，忽略。
+    }
   })
 
   box.addEventListener('pointermove', (event) => {
@@ -117,7 +121,11 @@ export function createShot() {
   const endDrag = (event) => {
     if (!state.dragging) return
     state.dragging = false
-    box.releasePointerCapture?.(event.pointerId)
+    try {
+      box.releasePointerCapture(event.pointerId)
+    } catch {
+      // 忽略。
+    }
   }
   box.addEventListener('pointerup', endDrag)
   box.addEventListener('pointercancel', endDrag)

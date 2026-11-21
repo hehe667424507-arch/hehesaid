@@ -16,6 +16,7 @@ import {
   getSettings,
 } from './repo.js'
 import { createQuizView } from './quiz.js'
+import { createTodayView } from './today.js'
 import { createIngestView } from './ingest.js'
 import { createListsView } from './lists.js'
 import { createSettingsView } from './settings.js'
@@ -30,6 +31,7 @@ const statsBox = document.getElementById('stats')
 const tabBar = document.getElementById('tabbar')
 const sections = {
   quiz: document.getElementById('view-quiz'),
+  today: document.getElementById('view-today'),
   ingest: document.getElementById('view-ingest'),
   lists: document.getElementById('view-lists'),
   settings: document.getElementById('view-settings'),
@@ -173,6 +175,12 @@ function buildViews() {
   }
   views = {
     quiz: createQuizView(common),
+    today: createTodayView({
+      refreshStats,
+      onDataChanged: async () => {
+        await refreshStats()
+      },
+    }),
     ingest: createIngestView(common),
     lists: createListsView(common),
     settings: createSettingsView({

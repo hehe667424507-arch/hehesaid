@@ -1,8 +1,9 @@
-// 题库页：未看 / 错题 / 已做对 三个列表，按当前大类目 + 小类目筛选，
-// 缩略图懒加载，可重置或删除单题。
+// 题库页：未看 / 错题 / 已做对 三个列表，按当前大类目 + 小类目筛选。
+// 缩略图懒加载并且按小尺寸解码，点开是预览（可改判、可存图）。
 
-import { el, toast, confirmDialog, dialog, formatTime } from './ui.js'
-import { createShot } from './viewer.js'
+import { el, toast, confirmDialog, formatTime } from './ui.js'
+import { openPreview } from './preview.js'
+import { getThumbURL } from './thumb.js'
 import {
   STATUS,
   listGroups,
@@ -11,7 +12,6 @@ import {
   resetCategory,
   deleteGroup,
 } from './repo.js'
-import { getImageURL } from './storage.js'
 
 const TABS = [
   { key: 'new', label: '未看' },
@@ -24,18 +24,13 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
   let groups = []
   let subcategoryNames = new Map()
   let observer = null
-  const urls = new Map()
+  const pending = new WeakMap()
 
   const tabBar = el('div', { class: 'seg' })
   const listBox = el('div', { class: 'list-box' })
   const summary = el('div', { class: 'list-summary' })
 
   const root = el('div', { class: 'lists' }, summary, tabBar, listBox)
-
-  function freeUrls() {
-    for (const url of urls.values()) URL.revokeObjectURL(url)
-    urls.clear()
-  }
 
   function ensureObserver() {
     if (observer) return observer
@@ -45,77 +40,22 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
           if (!entry.isIntersecting) continue
           const img = entry.target
           observer.unobserve(img)
-          loadThumb(img)
+          const imageId = pending.get(img)
+          if (!imageId) continue
+          getThumbURL(imageId)
+            .then((url) => {
+              if (url) img.src = url
+              else {
+                img.classList.add('thumb-fail')
+                img.alt = '图片丢失'
+              }
+            })
+            .catch(() => img.classList.add('thumb-fail'))
         }
       },
       { root: null, rootMargin: '300px 0px', threshold: 0.01 },
     )
     return observer
-  }
-
-  async function loadThumb(img) {
-    const id = img.dataset.imageId
-    if (!id || img.getAttribute('src')) return
-    try {
-      let url = urls.get(id)
-      if (!url) {
-        url = await getImageURL(id)
-        if (!url) {
-          img.classList.add('thumb-fail')
-          img.alt = '图片丢失'
-          return
-        }
-        urls.set(id, url)
-      }
-      img.src = url
-    } catch {
-      img.classList.add('thumb-fail')
-    }
-  }
-
-  async function openPreview(group) {
-    const dlg = el('dialog', { class: 'dlg dlg-preview' })
-    const content = el('div', { class: 'preview-body' })
-    const tempUrls = []
-    const add = async (imageId, label) => {
-      const url = await getImageURL(imageId)
-      if (!url) {
-        content.append(el('div', { class: 'missing-image', text: `${label} 图片丢失` }))
-        return
-      }
-      tempUrls.push(url)
-      const shot = createShot()
-      shot.setSrc(url)
-      content.append(el('div', { class: 'shot-label', text: label }), shot.el)
-    }
-    await add(group.questionImageId, '题目')
-    const ids = group.explanationImageIds || []
-    for (const [index, id] of ids.entries()) await add(id, `解析 ${index + 1}`)
-    if (!ids.length) content.append(el('div', { class: 'no-explanation', text: '本题没有解析图' }))
-
-    dlg.append(
-      el(
-        'div',
-        { class: 'dlg-inner dlg-inner-preview' },
-        el(
-          'div',
-          { class: 'dlg-head' },
-          el('h2', { class: 'dlg-title', text: '题目预览' }),
-          el('button', {
-            class: 'btn btn-sm btn-ghost',
-            text: '关闭',
-            onclick: () => dlg.close(),
-          }),
-        ),
-        content,
-      ),
-    )
-    dlg.addEventListener('close', () => {
-      for (const url of tempUrls) URL.revokeObjectURL(url)
-      dlg.remove()
-    })
-    document.body.append(dlg)
-    dlg.showModal()
   }
 
   function renderTabs() {
@@ -128,7 +68,6 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
           onclick: () => {
             if (activeTab === tab.key) return
             activeTab = tab.key
-            freeUrls()
             renderTabs()
             renderList()
           },
@@ -137,25 +76,33 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
     )
   }
 
+  function openItem(group) {
+    return openPreview(group, {
+      onChanged: async () => {
+        await refreshAll()
+      },
+    })
+  }
+
   function itemFor(group) {
     const explanationCount = (group.explanationImageIds || []).length
     const subName = subcategoryNames.get(group.subcategoryId) || '未分类'
-    const img = el('img', {
-      class: 'thumb-img',
-      alt: '',
-      loading: 'lazy',
-      dataset: { imageId: group.questionImageId },
-    })
+    const img = el('img', { class: 'thumb-img', alt: '', loading: 'lazy' })
+    pending.set(img, group.questionImageId)
+    ensureObserver().observe(img)
 
-    const row = el(
+    return el(
       'div',
       { class: 'list-item' },
-      el('div', { class: 'thumb-frame' }, img),
+      el('div', { class: 'thumb-frame', onclick: () => openItem(group) }, img),
       el(
         'div',
-        { class: 'list-info' },
+        { class: 'list-info', onclick: () => openItem(group) },
         el('div', { class: 'list-title', text: subName }),
-        el('div', { class: 'list-meta', text: `解析 ${explanationCount} 张 · 做过 ${group.attempts || 0} 次` }),
+        el('div', {
+          class: 'list-meta',
+          text: `解析 ${explanationCount} 张 · 做过 ${group.attempts || 0} 次`,
+        }),
         el('div', {
           class: 'list-sub',
           text: group.lastAt
@@ -177,7 +124,7 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
         el('button', {
           class: 'btn btn-sm',
           text: '预览',
-          onclick: () => openPreview(group),
+          onclick: () => openItem(group),
         }),
         el('button', {
           class: 'btn btn-sm',
@@ -210,9 +157,6 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
         }),
       ),
     )
-
-    ensureObserver().observe(img)
-    return row
   }
 
   function renderList() {
@@ -254,7 +198,6 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
     ])
     groups = rows
     subcategoryNames = new Map(subs.map((row) => [row.id, row.name]))
-    freeUrls()
     renderTabs()
     renderList()
     await renderSummary()
@@ -300,7 +243,6 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
       await refreshAll()
     },
     destroy() {
-      freeUrls()
       observer?.disconnect()
     },
   }
