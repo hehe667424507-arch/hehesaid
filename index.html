@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#1f5f9e" />
+    <meta name="description" content="纯本地的图片刷题工具：存题目图、随机抽题、记录对错。" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="图片刷题" />
+    <title>图片刷题</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <div id="file-warning" hidden>
+      <h1>请双击「启动.bat」来打开</h1>
+      <p>
+        这个应用需要本地小服务器才能保存图片。直接双击 index.html 打开会白屏，这是浏览器的安全限制。
+      </p>
+      <p>正确做法：回到文件夹，双击 <b>启动.bat</b>，等浏览器自动打开即可。</p>
+    </div>
+
+    <div id="app">
+      <header id="topbar">
+        <div class="topbar-row">
+          <label class="cat-label">
+            类目
+            <select id="categorySelect" aria-label="选择类目"></select>
+          </label>
+          <button id="btnAddCategory" class="btn btn-sm" type="button">＋ 类目</button>
+        </div>
+        <div id="stats" class="stats"></div>
+      </header>
+
+      <main id="main">
+        <section id="view-quiz" class="view" hidden></section>
+        <section id="view-ingest" class="view" hidden></section>
+        <section id="view-lists" class="view" hidden></section>
+        <section id="view-settings" class="view" hidden></section>
+      </main>
+
+      <nav id="tabbar" aria-label="主导航">
+        <button class="tab active" type="button" data-tab="quiz">刷题</button>
+        <button class="tab" type="button" data-tab="ingest">录入</button>
+        <button class="tab" type="button" data-tab="lists">题库</button>
+        <button class="tab" type="button" data-tab="settings">设置</button>
+      </nav>
+    </div>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <noscript>这个应用需要开启 JavaScript 才能使用。</noscript>
+
+    <script>
+      if (location.protocol === 'file:') {
+        document.getElementById('file-warning').hidden = false
+        document.getElementById('app').hidden = true
+      }
+    </script>
+    <script src="vendor/jszip.min.js"></script>
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
