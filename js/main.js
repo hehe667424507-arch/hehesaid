@@ -192,8 +192,13 @@ function buildViews() {
 }
 
 async function boot() {
+  const stage = (name) => {
+    window.__bootStage = name
+  }
+
   // 尽早注册 Service Worker：它负责让应用壳离线可用、让手机能装到主屏幕。
   // updateViaCache:'none' 让浏览器每次都去核对 sw.js，不被 HTTP 缓存挡住。
+  stage('注册离线缓存')
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     const hadController = Boolean(navigator.serviceWorker.controller)
     let reloading = false
@@ -221,15 +226,18 @@ async function boot() {
       })
   }
 
+  stage('打开本地存储')
   await initStorage()
   if (storageMode() === 'idb') {
     toast('这台浏览器不支持本地文件存储，图片改存在数据库里（仍然只在本机）', 'info')
   }
 
+  stage('读取类目')
   categories = await ensureDefaultCategory()
   renderCategorySelect()
   await reloadSubcategories()
 
+  stage('准备页面')
   buildViews()
 
   categorySelect.addEventListener('change', async () => {
@@ -270,6 +278,7 @@ async function boot() {
     setTab(button.dataset.tab)
   })
 
+  stage('显示首页')
   await refreshStats()
   setTab('quiz')
 

@@ -78,13 +78,50 @@
       }
 
       // 启动看门狗：不依赖任何模块脚本，JS 加载失败时也能用。
-      // 8 秒还没启动完，就把"清缓存重启"的按钮亮出来。
-      window.__bootWatch = setTimeout(function () {
+      // 8 秒还没启动完，就把卡在哪一步、报了什么错显示出来。
+      window.__bootStage = '加载脚本'
+      window.__bootErrors = []
+
+      window.addEventListener('error', function (event) {
+        var msg = event.message || '未知错误'
+        if (event.filename) {
+          msg += '（' + String(event.filename).split('/').pop() + ':' + (event.lineno || 0) + '）'
+        }
+        window.__bootErrors.push(msg)
+      })
+
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event.reason
+        window.__bootErrors.push(
+          'Promise: ' + (reason && reason.message ? reason.message : String(reason)),
+        )
+      })
+
+      window.__bootWatch = setTimeout(async function () {
         var veil = document.getElementById('boot-veil')
         if (!veil) return
+
         document.getElementById('boot-title').textContent = '启动卡住了'
-        document.getElementById('boot-sub').textContent =
-          '可能是这个浏览器缓存了旧文件，清一下网页缓存再试。'
+        var lines = []
+        lines.push('卡在：' + (window.__bootStage || '未知'))
+
+        var ua = navigator.userAgent || ''
+        var ver = ua.match(/EdgA?\/([\d.]+)/) || ua.match(/Chrome\/([\d.]+)/)
+        lines.push('浏览器：' + (ver ? '内核 ' + ver[1] : ua.slice(0, 40)))
+
+        if (window.__bootErrors.length) {
+          lines.push('错误：' + window.__bootErrors.slice(0, 2).join('；'))
+        }
+
+        // 探一下模块本身能不能加载：能加载说明是执行时卡住，加载不了说明文件/语法有问题。
+        try {
+          await import('./js/main.js?probe=' + Date.now())
+          lines.push('脚本：能加载（说明是运行中卡住）')
+        } catch (error) {
+          lines.push('脚本加载失败：' + (error && error.message ? error.message : String(error)))
+        }
+
+        document.getElementById('boot-sub').textContent = lines.join('\n')
         document.getElementById('boot-rescue').hidden = false
         document.getElementById('boot-tip').hidden = false
       }, 8000)

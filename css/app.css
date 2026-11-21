@@ -990,6 +990,8 @@ select {
   color: var(--muted);
   max-width: 26em;
   line-height: 1.7;
+  white-space: pre-line;
+  word-break: break-word;
 }
 
 .boot-rescue {
