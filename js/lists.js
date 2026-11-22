@@ -3,6 +3,7 @@
 
 import { el, toast, confirmDialog, formatTime } from './ui.js'
 import { openPreview } from './preview.js'
+import { openPaperSetup, startPaper, exportPaperPDF } from './paper.js'
 import { getThumbURL } from './thumb.js'
 import {
   STATUS,
@@ -17,7 +18,7 @@ const TABS = [
   { key: 'today', label: '今天' },
   { key: 'new', label: '未看' },
   { key: 'wrong', label: '错题' },
-  { key: 'done', label: '已做对' },
+  { key: 'done', label: '对题' },
 ]
 
 const RESULT_LABEL = { right: '做对', wrong: '做错', skip: '跳过' }
@@ -42,7 +43,9 @@ export function createListsView({
 }) {
   let activeTab = 'new'
   let todayWrongOnly = false
+  let doneFilterMode = 'all'
   let groups = []
+  let allGroups = []
   let todayGroups = []
   let subcategoryNames = new Map()
   let observer = null
@@ -50,9 +53,11 @@ export function createListsView({
 
   const tabBar = el('div', { class: 'seg seg-4' })
   const todayFilter = el('div', { class: 'today-filter', hidden: true })
+  const doneFilter = el('div', { class: 'today-filter', hidden: true })
+  const paperRow = el('div', { class: 'paper-btn-row' })
   const listBox = el('div', { class: 'list-box' })
 
-  const root = el('div', { class: 'lists' }, tabBar, todayFilter, listBox)
+  const root = el('div', { class: 'lists' }, tabBar, todayFilter, doneFilter, paperRow, listBox)
 
   function ensureObserver() {
     if (observer) return observer
@@ -102,6 +107,7 @@ export function createListsView({
             activeTab = tab.key
             renderTabs()
             renderTodayFilter()
+            renderDoneFilter()
             renderList()
           },
         })
@@ -127,6 +133,44 @@ export function createListsView({
         },
       }),
     )
+  }
+
+  function renderDoneFilter() {
+    const show = activeTab === 'done'
+    doneFilter.hidden = !show
+    if (!show) {
+      doneFilter.replaceChildren()
+      return
+    }
+    doneFilter.replaceChildren(
+      ...[
+        { key: 'all', label: '全部对题' },
+        { key: 'clean', label: '一次做对' },
+        { key: 'missed', label: '曾做错' },
+      ].map((item) =>
+        el('button', {
+          class: `chip ${doneFilterMode === item.key ? 'active' : ''}`,
+          text: item.label,
+          onclick: () => {
+            doneFilterMode = item.key
+            renderDoneFilter()
+            renderList()
+          },
+        }),
+      ),
+    )
+  }
+
+  async function makePaper() {
+    const subs = [...subcategoryNames.entries()].map(([id, name]) => ({ id, name }))
+    if (!subs.length) {
+      toast('还没有小类目', 'info')
+      return
+    }
+    const result = await openPaperSetup({ groups: allGroups, subcategories: subs })
+    if (!result) return
+    if (result.action === 'pdf') await exportPaperPDF(result.list)
+    else startPaper(result.list)
   }
 
   function openItem(group) {
@@ -258,7 +302,13 @@ export function createListsView({
       return
     }
 
-    const filtered = groups.filter((group) => group.status === activeTab)
+    let filtered = groups.filter((group) => group.status === activeTab)
+    // 对题里再分「一次做对」和「曾做错」。
+    if (activeTab === 'done' && doneFilterMode !== 'all') {
+      filtered = filtered.filter((group) =>
+        doneFilterMode === 'missed' ? (group.wrongCount || 0) > 0 : !(group.wrongCount || 0),
+      )
+    }
     // 错题本：最近做错的排前面，最该复习的先看到。
     if (activeTab === 'wrong') {
       filtered.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))
@@ -272,12 +322,14 @@ export function createListsView({
 
   async function refreshAll() {
     const categoryId = getCategoryId()
-    const [rangeGroups, subs] = await Promise.all([
+    const [rangeGroups, categoryGroups, subs] = await Promise.all([
       categoryId ? listGroups(categoryId, getSubcategoryId()) : Promise.resolve([]),
+      categoryId ? listGroups(categoryId) : Promise.resolve([]),
       categoryId ? listSubcategories(categoryId) : Promise.resolve([]),
     ])
 
     groups = rangeGroups
+    allGroups = categoryGroups
     subcategoryNames = new Map(subs.map((row) => [row.id, row.name]))
 
     // 「今天」跟着当前小类目走，和上面的统计保持一致。
@@ -288,6 +340,11 @@ export function createListsView({
 
     renderTabs()
     renderTodayFilter()
+    renderDoneFilter()
+    paperRow.replaceChildren(
+      el('button', { class: 'btn btn-sm', text: '出卷子', onclick: () => makePaper() }),
+    )
+    paperRow.hidden = !allGroups.length
     renderList()
     await refreshStats()
     await onDataChanged?.()

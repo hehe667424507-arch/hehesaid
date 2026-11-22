@@ -2,7 +2,8 @@
 // 小类目直接用顶部选择的那一个，页面里不再单独放一个选择条。
 
 import { el, toast, confirmDialog } from './ui.js'
-import { PRESETS, compressImage, BIG_FILE_BYTES } from './image.js'
+import { PRESETS, compressImage, BIG_FILE_BYTES, imageFingerprint, fingerprintDistance } from './image.js'
+import { getAll } from './db.js'
 import {
   createGroup,
   deleteGroup,
@@ -95,6 +96,21 @@ export function createIngestView({
     return answer ? info.originalFile : info.blob
   }
 
+  /** 库里有没有长得很像的图（提示用，不拦截）。 */
+  async function findDuplicate(fingerprint) {
+    if (!fingerprint) return null
+    try {
+      const rows = await getAll('images')
+      return (
+        rows.find(
+          (row) => row.fingerprint && fingerprintDistance(row.fingerprint, fingerprint) <= 6,
+        ) || null
+      )
+    } catch {
+      return null
+    }
+  }
+
   async function persistGroup(questionFile, explanationFiles, onProgress = () => {}) {
     const categoryId = getCategoryId()
     const subcategoryId = currentSub()
@@ -112,7 +128,12 @@ export function createIngestView({
       q.originalFile = questionFile
       onProgress(`正在保存题目图 1/${total}…`)
       const qBlob = await askKeepOriginal(q, 1, total)
-      const qSaved = await saveImageBlob(qBlob)
+      const qFingerprint = await imageFingerprint(qBlob)
+      const duplicate = await findDuplicate(qFingerprint)
+      if (duplicate) {
+        toast('这张题目图库里好像已经有了，还是保存了一份', 'info')
+      }
+      const qSaved = await saveImageBlob(qBlob, { fingerprint: qFingerprint })
       savedIds.push(qSaved.id)
 
       const explanationIds = []
@@ -122,7 +143,9 @@ export function createIngestView({
         c.originalFile = file
         onProgress(`正在保存解析图 ${index + 1}/${total}…`)
         const blob = await askKeepOriginal(c, index + 2, total)
-        const saved = await saveImageBlob(blob)
+        const saved = await saveImageBlob(blob, {
+          fingerprint: await imageFingerprint(blob),
+        })
         savedIds.push(saved.id)
         explanationIds.push(saved.id)
       }

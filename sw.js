@@ -6,7 +6,7 @@
 //
 // 策略：网络优先，2.5 秒拿不到就用缓存。
 
-const VERSION = 'v15'
+const VERSION = 'v16'
 const CACHE = `picture-quiz-${VERSION}`
 
 const SHELL_PATHS = [
@@ -23,6 +23,7 @@ const SHELL_PATHS = [
   './js/doodle.js',
   './js/fullscreen.js',
   './js/preview.js',
+  './js/paper.js',
   './js/thumb.js',
   './js/repo.js',
   './js/quiz.js',

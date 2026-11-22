@@ -28,6 +28,38 @@ export function getPreset(key) {
 /** 压缩后仍然超过这个大小就提醒用户：保留原图会更占空间。 */
 export const BIG_FILE_BYTES = 3 * 1024 * 1024
 
+/** 8×8 灰度指纹：用来发现"这张可能录过了"。 */
+export async function imageFingerprint(blob) {
+  try {
+    const bitmap = await createImageBitmap(blob)
+    const canvas = document.createElement('canvas')
+    canvas.width = 8
+    canvas.height = 8
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    ctx.drawImage(bitmap, 0, 0, 8, 8)
+    bitmap.close?.()
+    const data = ctx.getImageData(0, 0, 8, 8).data
+    const gray = []
+    for (let i = 0; i < data.length; i += 4) {
+      gray.push(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+    }
+    const avg = gray.reduce((sum, value) => sum + value, 0) / gray.length
+    return gray.map((value) => (value >= avg ? '1' : '0')).join('')
+  } catch {
+    return ''
+  }
+}
+
+/** 两个指纹有几个位不一样（越小越像）。 */
+export function fingerprintDistance(a, b) {
+  if (!a || !b || a.length !== b.length) return 64
+  let diff = 0
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) diff += 1
+  }
+  return diff
+}
+
 async function loadBitmap(file) {
   if (typeof createImageBitmap === 'function') {
     try {

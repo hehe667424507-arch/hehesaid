@@ -232,6 +232,16 @@ async function boot() {
       })
   }
 
+  window.__reloadSubcategories = async () => {
+    await reloadSubcategories()
+    updateTopbarTitle()
+  }
+  window.__refreshCategories = async () => {
+    categories = await listCategories()
+    renderCategorySelect()
+    updateTopbarTitle()
+  }
+
   stage('打开本地存储')
   await initStorage()
   if (storageMode() === 'idb') {

@@ -10,6 +10,8 @@ import {
   listSubcategories,
   listGroups,
   resetCategory,
+  renameCategory,
+  renameSubcategory,
   STATUS,
 } from './repo.js'
 import { getAll } from './db.js'
@@ -242,6 +244,22 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
           el('span', { class: 'sub-name', text: sub.name }),
           el('span', { class: 'sub-count', text: `${counts.get(sub.id) || 0} 题` }),
           el('button', {
+            class: 'btn btn-sm',
+            text: '改名',
+            onclick: async () => {
+              const name = await askText('小类目改名', { value: sub.name })
+              if (!name || name === sub.name) return
+              try {
+                await renameSubcategory(sub.id, name)
+                toast('已改名', 'ok')
+                await renderCategories()
+                await window.__reloadSubcategories?.()
+              } catch (error) {
+                toast(error.message || '改名失败', 'error')
+              }
+            },
+          }),
+          el('button', {
             class: 'btn btn-sm btn-danger-ghost',
             text: '删除',
             onclick: async () => {
@@ -255,6 +273,7 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
                 toast(result.moved ? `已删除，${result.moved} 道题已挪走` : '已删除', 'ok')
                 await renderCategories()
                 await renderStorage()
+                await window.__reloadSubcategories?.()
               } catch (error) {
                 toast(error.message || '删除失败', 'error')
               }
@@ -275,6 +294,22 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
             el(
               'span',
               { class: 'cat-actions' },
+              el('button', {
+                class: 'btn btn-sm',
+                text: '改名',
+                onclick: async () => {
+                  const name = await askText('大类目改名', { value: row.name })
+                  if (!name || name === row.name) return
+                  try {
+                    await renameCategory(row.id, name)
+                    toast('已改名', 'ok')
+                    await renderCategories()
+                    await window.__refreshCategories?.()
+                  } catch (error) {
+                    toast(error.message || '改名失败', 'error')
+                  }
+                },
+              }),
               el('button', {
                 class: 'btn btn-sm',
                 text: '＋ 小类目',

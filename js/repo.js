@@ -215,8 +215,8 @@ export async function createGroup({
 }
 
 /** 保存图片并返回 id。失败会抛出带说明的错误。 */
-export async function saveImageBlob(blob) {
-  return putImage(blob)
+export async function saveImageBlob(blob, options = {}) {
+  return putImage(blob, options)
 }
 
 function referencedImageIds(group) {
@@ -297,19 +297,62 @@ export async function categoryStats(categoryId, subcategoryId = ALL_SUBCATEGORIE
   return stats
 }
 
-/** 抽取池：未看 + 错题；只抽错题时只有错题。 */
+/** 抽取池：未看 + 错题；只抽错题时只有错题。按"越该复习越容易被抽到"加权。 */
 export function pickGroup(groups, { wrongOnly = false, excludeId = null } = {}) {
   const pool = groups.filter((group) =>
     wrongOnly ? group.status === STATUS.WRONG : group.status !== STATUS.DONE,
   )
   if (!pool.length) return { group: null, poolSize: 0 }
+
   let candidates = pool
   if (pool.length > 1 && excludeId) {
     const filtered = pool.filter((group) => group.id !== excludeId)
     if (filtered.length) candidates = filtered
   }
-  const group = candidates[Math.floor(Math.random() * candidates.length)]
-  return { group, poolSize: pool.length }
+
+  // 权重：错过越多、标了星、越久没碰，越优先。
+  const now = Date.now()
+  const weights = candidates.map((group) => {
+    let weight = 1
+    weight += (group.wrongCount || 0) * 2
+    if (group.starred) weight += 3
+    if (group.lastAt) weight += Math.min((now - group.lastAt) / 86400000, 30) * 0.1
+    else weight += 1
+    return weight
+  })
+
+  const total = weights.reduce((sum, value) => sum + value, 0)
+  let roll = Math.random() * total
+  for (const [index, group] of candidates.entries()) {
+    roll -= weights[index]
+    if (roll <= 0) return { group, poolSize: pool.length }
+  }
+  return { group: candidates[candidates.length - 1], poolSize: pool.length }
+}
+
+/** 星标：不参与对错统计，只用来组卷 / 标记难题。 */
+export async function toggleStar(groupId) {
+  const group = await getOne('groups', groupId)
+  if (!group) return null
+  return updateGroup(groupId, { starred: !group.starred })
+}
+
+export async function renameCategory(categoryId, name) {
+  const clean = String(name || '').trim()
+  if (!clean) throw new Error('名字不能为空')
+  const category = await getOne('categories', categoryId)
+  if (!category) throw new Error('找不到这个大类目')
+  await putOne('categories', { ...category, name: clean })
+  return clean
+}
+
+export async function renameSubcategory(subId, name) {
+  const clean = String(name || '').trim()
+  if (!clean) throw new Error('名字不能为空')
+  const sub = await getOne('subcategories', subId)
+  if (!sub) throw new Error('找不到这个小类目')
+  await putOne('subcategories', { ...sub, name: clean })
+  return clean
 }
 
 // ———————————————— 备份 ————————————————

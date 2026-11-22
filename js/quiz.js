@@ -11,6 +11,7 @@ import {
   pickGroup,
   recordResult,
   updateGroup,
+  toggleStar,
   getGroup,
   getSettings,
   saveSettings,
@@ -173,8 +174,31 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
     shot.setSrc(url)
 
     const subName = currentSubcategoryName(group)
+    const starBtn = el('button', {
+      class: `star ${group.starred ? 'on' : ''}`,
+      text: group.starred ? '★' : '☆',
+      title: '标为难题',
+      onclick: async () => {
+        try {
+          const next = await toggleStar(group.id)
+          if (!next) return
+          current = next
+          starBtn.textContent = next.starred ? '★' : '☆'
+          starBtn.classList.toggle('on', Boolean(next.starred))
+          toast(next.starred ? '已标为难题，组卷时可选' : '已取消难题标记', 'ok')
+        } catch (error) {
+          toast(error.message || '标记失败', 'error')
+        }
+      },
+    })
+
     scroll.append(
-      el('div', { class: 'shot-label', text: subName ? `题目 · ${subName}` : '题目' }),
+      el(
+        'div',
+        { class: 'shot-head-row' },
+        el('div', { class: 'shot-label', text: subName ? `题目 · ${subName}` : '题目' }),
+        starBtn,
+      ),
       shot.el,
     )
     if (isReview) {

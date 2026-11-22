@@ -85,10 +85,10 @@ async function deleteOpfs(id) {
  * 保存一张图片，返回图片 id。
  * 返回 { id, bytes, store, degraded }，degraded 表示从 OPFS 掉到了数据库。
  */
-export async function putImage(blob) {
+export async function putImage(blob, { fingerprint = '' } = {}) {
   const id = newId('img')
   const bytes = blob.size
-  const record = { id, bytes, at: Date.now() }
+  const record = { id, bytes, at: Date.now(), fingerprint }
 
   if (!dirHandle || mode !== 'opfs') {
     await putOne('blobs', { id, blob })
