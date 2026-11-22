@@ -3,7 +3,6 @@
 
 import { el, toast, confirmDialog, formatTime } from './ui.js'
 import { openPreview } from './preview.js'
-import { openPaperSetup, startPaper, exportPaperPDF } from './paper.js'
 import { getThumbURL } from './thumb.js'
 import {
   STATUS,
@@ -54,10 +53,9 @@ export function createListsView({
   const tabBar = el('div', { class: 'seg seg-4' })
   const todayFilter = el('div', { class: 'today-filter', hidden: true })
   const doneFilter = el('div', { class: 'today-filter', hidden: true })
-  const paperRow = el('div', { class: 'paper-btn-row' })
   const listBox = el('div', { class: 'list-box' })
 
-  const root = el('div', { class: 'lists' }, tabBar, todayFilter, doneFilter, paperRow, listBox)
+  const root = el('div', { class: 'lists' }, tabBar, todayFilter, doneFilter, listBox)
 
   function ensureObserver() {
     if (observer) return observer
@@ -159,18 +157,6 @@ export function createListsView({
         }),
       ),
     )
-  }
-
-  async function makePaper() {
-    const subs = [...subcategoryNames.entries()].map(([id, name]) => ({ id, name }))
-    if (!subs.length) {
-      toast('还没有小类目', 'info')
-      return
-    }
-    const result = await openPaperSetup({ groups: allGroups, subcategories: subs })
-    if (!result) return
-    if (result.action === 'pdf') await exportPaperPDF(result.list)
-    else startPaper(result.list)
   }
 
   function openItem(group) {
@@ -341,10 +327,6 @@ export function createListsView({
     renderTabs()
     renderTodayFilter()
     renderDoneFilter()
-    paperRow.replaceChildren(
-      el('button', { class: 'btn btn-sm', text: '出卷子', onclick: () => makePaper() }),
-    )
-    paperRow.hidden = !allGroups.length
     renderList()
     await refreshStats()
     await onDataChanged?.()

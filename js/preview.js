@@ -93,8 +93,7 @@ export async function openPreview(group, { onChanged, showRetag = true, actions 
         status,
         lastAt: Date.now(),
         lastResult: result,
-        // 改判不算又做了一次，attempts 不变；但记错次数要跟着变。
-        wrongCount: Math.max(0, (current.wrongCount || 0) + (result === 'wrong' ? 1 : 0)),
+        // 改判只是纠正记录：既不算"又做了一次"，也不增加"错过几次"。
       })
       renderRetag()
       toast('已改判', 'ok')

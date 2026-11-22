@@ -51,7 +51,3 @@ export async function getThumbURL(imageId) {
   return url
 }
 
-export function clearThumbCache() {
-  for (const url of cache.values()) URL.revokeObjectURL(url)
-  cache.clear()
-}

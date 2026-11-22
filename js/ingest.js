@@ -2,7 +2,7 @@
 // 小类目直接用顶部选择的那一个，页面里不再单独放一个选择条。
 
 import { el, toast, confirmDialog } from './ui.js'
-import { PRESETS, compressImage, BIG_FILE_BYTES, imageFingerprint, fingerprintDistance } from './image.js'
+import { compressImage, BIG_FILE_BYTES, imageFingerprint, fingerprintDistance } from './image.js'
 import { getAll } from './db.js'
 import {
   createGroup,

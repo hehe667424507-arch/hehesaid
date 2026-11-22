@@ -140,12 +140,6 @@ export async function deleteImage(id) {
   await deleteOne('images', id)
 }
 
-export async function imageExists(id) {
-  if (!id) return false
-  const record = await getOne('images', id)
-  return Boolean(record)
-}
-
 export async function listImages() {
   return getAll('images')
 }

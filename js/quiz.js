@@ -277,7 +277,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
         return
       }
       await showGroup(group, { isReview: true })
-      hint.textContent = `还有 ${history.length} 步可以往回退`
+      hint.textContent = '可以直接改判，也可以点「显示解析」再看一遍'
       backBtn.hidden = false
     } catch (error) {
       toast(error.message || '回退失败', 'error')
