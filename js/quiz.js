@@ -1,9 +1,9 @@
 // 刷题页：抽题 → 只看题目图 → 显示解析 → 自评。
 // 支持「上一题」：回到刚做过的题重新改判（改判不增加做题次数）。
 
-import { el, toast, confirmDialog } from './ui.js'
+import { el, toast } from './ui.js'
 import { createShot } from './viewer.js'
-import { openFullscreen } from './fullscreen.js'
+import { openGallery } from './fullscreen.js'
 import {
   STATUS,
   listGroups,
@@ -23,7 +23,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   const scroll = el('div', { class: 'quiz-scroll' })
   const drawBtn = el('button', { class: 'btn btn-primary btn-lg', text: '抽一题' })
   const wrongOnlyInput = el('input', { type: 'checkbox', id: 'wrongOnly' })
-  const revealBtn = el('button', { class: 'btn btn-lg', text: '显示解析' })
+  const revealBtn = el('button', { class: 'btn btn-sm', text: '显示解析' })
   const rightBtn = el('button', { class: 'btn btn-lg btn-ok', text: '做对' })
   const wrongBtn = el('button', { class: 'btn btn-lg btn-warn', text: '做错' })
   const skipBtn = el('button', { class: 'btn btn-lg', text: '跳过' })
@@ -31,7 +31,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   const hint = el('div', { class: 'quiz-hint' })
 
   const judgeRow = el('div', { class: 'row row-judge', hidden: true }, rightBtn, wrongBtn, skipBtn)
-  const revealRow = el('div', { class: 'row', hidden: true }, revealBtn)
+  const revealRow = el('div', { class: 'row row-left', hidden: true }, revealBtn)
   const navRow = el('div', { class: 'row row-nav' }, backBtn, hint)
 
   const drawRow = el(
@@ -61,6 +61,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   const history = []
   const objectUrls = []
   let subcategoryNames = new Map()
+  let gallery = []
 
   const lazyObserver = new IntersectionObserver(
     (entries) => {
@@ -155,6 +156,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
   async function showGroup(group, { isReview = false } = {}) {
     current = group
     revealed = false
+    gallery = []
     setJudgeVisible(true)
     setReviewMode(isReview)
     releaseImages()
@@ -166,9 +168,8 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
       return
     }
     objectUrls.push(url)
-    const shot = createShot({
-      onTap: () => openFullscreen(url, { title: '题目' }),
-    })
+    gallery.push({ url, label: '题目' })
+    const shot = createShot({ onTap: () => openGallery(gallery, 0) })
     shot.setSrc(url)
 
     const subName = currentSubcategoryName(group)
@@ -317,7 +318,9 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
         continue
       }
       objectUrls.push(url)
-      const shot = createShot()
+      gallery.push({ url, label: `解析 ${index + 1}` })
+      const galleryIndex = gallery.length - 1
+      const shot = createShot({ onTap: () => openGallery(gallery, galleryIndex) })
       // 懒加载：滚到附近才真的解码，避免一次把十几张大图塞进内存。
       shot.el.style.minHeight = '180px'
       shot.img.dataset.src = url
@@ -341,19 +344,13 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
       await retag(result)
       return
     }
-    const label = result === 'right' ? '做对' : result === 'wrong' ? '做错' : '跳过'
-    if (result !== 'skip') {
-      const ok = await confirmDialog(`确认这道题${label}了？`, {
-        title: `${label}确认`,
-        okText: `是，${label}`,
-      })
-      if (!ok) return
-    }
     busy = true
+    let recorded = false
     try {
       const wasWrong = current.status === STATUS.WRONG
       const groupId = current.id
       await recordResult(current, result)
+      recorded = true
       history.push({ groupId })
       if (history.length > HISTORY_LIMIT) history.shift()
       current = null
@@ -372,12 +369,20 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
       )
       await refreshStats()
       onDataChanged?.()
-      showEmpty('已记录', '点「抽一题」继续，或者点「上一题」回去改判。')
+      showEmpty('已记录', '马上出下一题…')
     } catch (error) {
       toast(error.message || '记录失败', 'error')
     } finally {
       busy = false
       backBtn.hidden = history.length === 0
+      // 记录成功后自动抽下一题，省掉一次点击。
+      if (recorded) {
+        setTimeout(() => {
+          if (root.offsetParent === null) return
+          if (current) return
+          drawNext()
+        }, 600)
+      }
     }
   }
 
@@ -414,6 +419,17 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
     el: root,
     async onShow() {
       await refreshSubcategoryNames()
+      // 切回来时保留正在做的那道题（连同是否已经展示解析）。
+      if (current) {
+        const wasRevealed = revealed
+        const wasReviewing = reviewing
+        const fresh = (await getGroup(current.id)) || current
+        await showGroup(fresh, { isReview: wasReviewing })
+        if (wasRevealed) await reveal()
+        hint.textContent = ''
+        backBtn.hidden = wasReviewing ? false : history.length === 0
+        return
+      }
       await firstRender()
       hint.textContent = ''
       backBtn.hidden = history.length === 0

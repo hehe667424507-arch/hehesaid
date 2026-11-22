@@ -6,7 +6,7 @@
 //
 // 策略：网络优先，2.5 秒拿不到就用缓存。
 
-const VERSION = 'v11'
+const VERSION = 'v12'
 const CACHE = `picture-quiz-${VERSION}`
 
 const SHELL_PATHS = [

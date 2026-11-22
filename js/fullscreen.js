@@ -1,15 +1,21 @@
-// 全屏看图：点一下题目图，图片占满整个屏幕，能滚、能双击放大。
-// 点左上角关闭，或者点图片外面的黑边退出。
+// 全屏看图：整屏只剩一个「×」，其余全交给手势。
+//  - 左右滑切上一张 / 下一张（题目 ↔ 解析）
+//  - 上下滑看长图
+//  - 双指缩放、双击放大
+//  - 短图居中，长图从顶部开始
 
 import { createShot } from './viewer.js'
 
-export function openFullscreen(url, { title = '题目' } = {}) {
-  const shot = createShot()
-  shot.setSrc(url)
+/**
+ * images: [{ url, label }]
+ * startIndex: 从第几张开始看
+ */
+export function openGallery(images, startIndex = 0) {
+  const list = (images || []).filter((item) => item && item.url)
+  if (!list.length) return null
 
-  const scroller = document.createElement('div')
-  scroller.className = 'fs-scroll'
-  scroller.append(shot.el)
+  const dialog = document.createElement('dialog')
+  dialog.className = 'dlg dlg-fullscreen'
 
   const closeButton = document.createElement('button')
   closeButton.className = 'fs-close'
@@ -17,38 +23,51 @@ export function openFullscreen(url, { title = '题目' } = {}) {
   closeButton.textContent = '×'
   closeButton.setAttribute('aria-label', '关闭')
 
-  const label = document.createElement('div')
-  label.className = 'fs-label'
-  label.textContent = title
+  const track = document.createElement('div')
+  track.className = 'fs-track'
 
-  const wrap = document.createElement('div')
-  wrap.className = 'fs-wrap'
-  wrap.append(label, closeButton, scroller)
+  const shots = []
+  for (const item of list) {
+    const shot = createShot()
+    shot.setSrc(item.url)
+    shots.push(shot)
 
-  const dialog = document.createElement('dialog')
-  dialog.className = 'dlg dlg-fullscreen'
-  dialog.append(wrap)
+    const page = document.createElement('div')
+    page.className = 'fs-page'
+    page.append(shot.el)
+    track.append(page)
+  }
+
+  dialog.append(track, closeButton)
   document.body.append(dialog)
 
+  let closed = false
   const close = () => {
+    if (closed) return
+    closed = true
     dialog.close()
   }
 
   closeButton.addEventListener('click', close)
+
   dialog.addEventListener('close', () => {
+    for (const shot of shots) shot.reset()
     dialog.remove()
-    shot.reset()
   })
   dialog.addEventListener('cancel', (event) => {
     event.preventDefault()
     close()
   })
 
-  // 点图片以外的黑边退出；点图片本身不退出（那样没法拖动了）。
-  dialog.addEventListener('click', (event) => {
-    if (event.target === dialog || event.target === scroller || event.target === wrap) close()
-  })
-
   dialog.showModal()
+
+  // 跳到指定的那张
+  const target = Math.min(Math.max(startIndex, 0), list.length - 1)
+  if (target > 0) {
+    requestAnimationFrame(() => {
+      track.scrollLeft = track.clientWidth * target
+    })
+  }
+
   return dialog
 }
