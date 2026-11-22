@@ -103,6 +103,16 @@ export async function askText(title, { placeholder = '', value = '', okText = '�
     maxlength: String(maxLength),
     autocomplete: 'off',
   })
+
+  // 手机输入法上的「开始 / 前往 / 回车」直接确认。
+  input.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    const dialogEl = input.closest('dialog')
+    const primary = dialogEl?.querySelector('.dlg-actions .btn-primary')
+    if (primary) primary.click()
+  })
+
   const body = el('div', {}, input)
   const answer = await dialog({
     title,

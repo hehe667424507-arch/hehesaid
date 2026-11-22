@@ -22,11 +22,14 @@ import { createSettingsView } from './settings.js'
 
 const KEY_CATEGORY = 'quiz.currentCategory'
 const KEY_SUBCATEGORY = 'quiz.currentSubcategory'
+const KEY_PANEL = 'quiz.panelOpen'
 
+const topbar = document.getElementById('topbar')
+const topbarToggle = document.getElementById('topbarToggle')
+const topbarTitle = document.getElementById('topbarTitle')
 const categorySelect = document.getElementById('categorySelect')
 const subcategorySelect = document.getElementById('subcategorySelect')
 const addCategoryBtn = document.getElementById('btnAddCategory')
-const statsBox = document.getElementById('stats')
 const tabBar = document.getElementById('tabbar')
 const sections = {
   quiz: document.getElementById('view-quiz'),
@@ -60,19 +63,20 @@ function currentSubcategoryName() {
   return row ? row.name : ''
 }
 
+function setPanelOpen(open) {
+  topbar.classList.toggle('panel-open', Boolean(open))
+  localStorage.setItem(KEY_PANEL, open ? '1' : '0')
+}
+
+function updateTopbarTitle() {
+  const cat = currentCategoryName() || '类目'
+  const sub = currentSubcategoryName() || '全部小类目'
+  topbarTitle.textContent = `${cat} · ${sub}`
+}
+
 async function refreshStats() {
-  if (!currentCategoryId) {
-    statsBox.replaceChildren(el('span', { class: 'stat', text: '还没有大类目' }))
-    return
-  }
-  const stats = await categoryStats(currentCategoryId, currentSubcategoryId)
-  const scope = currentSubcategoryId ? currentSubcategoryName() : '全部小类目'
-  statsBox.replaceChildren(
-    el('span', { class: 'stat stat-scope', title: `统计范围：${scope}`, text: scope }),
-    el('span', { class: 'stat' }, el('b', { text: String(stats.new) }), ' 未看'),
-    el('span', { class: 'stat' }, el('b', { text: String(stats.wrong) }), ' 错题'),
-    el('span', { class: 'stat' }, el('b', { text: String(stats.done) }), ' 已做对'),
-  )
+  // 顶部不再显示统计数字，只更新标题；数字都在「设置 → 统计」里。
+  updateTopbarTitle()
 }
 
 function renderCategorySelect() {
@@ -94,12 +98,9 @@ function renderSubcategorySelect() {
   for (const row of subcategories) {
     options.push(el('option', { value: row.id, text: row.name }))
   }
-  if (!subcategories.length) {
-    options.push(el('option', { value: '', text: '（还没有小类目，去「录入」或「设置」里建）' }))
-  }
+  options.push(el('option', { value: '__new__', text: '＋ 新建小类目…' }))
   subcategorySelect.replaceChildren(...options)
   subcategorySelect.value = currentSubcategoryId || ALL_SUBCATEGORIES
-  subcategorySelect.disabled = !subcategories.length
 }
 
 async function reloadCategories() {
@@ -131,8 +132,9 @@ function setTab(name) {
   }
   const view = views[name]
   if (view && typeof view.onShow === 'function') {
-    view.onShow().catch((error) => toast(error.message || '页面加载失败', 'error'))
+    return view.onShow().catch((error) => toast(error.message || '页面加载失败', 'error'))
   }
+  return Promise.resolve()
 }
 
 async function reloadActiveView() {
@@ -170,6 +172,10 @@ function buildViews() {
     goQuiz: () => setTab('quiz'),
     goSettings: () => setTab('settings'),
     onScopeChanged,
+    onStartQuiz: async (group) => {
+      await setTab('quiz')
+      await views.quiz?.startWith?.(group.id)
+    },
   }
   views = {
     quiz: createQuizView(common),
@@ -250,10 +256,36 @@ async function boot() {
   })
 
   subcategorySelect.addEventListener('change', async () => {
+    if (subcategorySelect.value === '__new__') {
+      subcategorySelect.value = currentSubcategoryId || ALL_SUBCATEGORIES
+      const name = await askText('新建小类目', { placeholder: '比如：第一章 极限、第二章 导数' })
+      if (!name) return
+      try {
+        const sub = await createSubcategory(currentCategoryId, name)
+        await reloadSubcategories()
+        currentSubcategoryId = sub.id
+        subcategorySelect.value = sub.id
+        await onScopeChanged()
+        setPanelOpen(false)
+        await reloadActiveView()
+        toast(`已新建小类目「${sub.name}」`, 'ok')
+      } catch (error) {
+        toast(error.message || '新建失败', 'error')
+      }
+      return
+    }
     currentSubcategoryId = subcategorySelect.value || ALL_SUBCATEGORIES
     await onScopeChanged()
+    // 小类目选完就收起，回到干净的做题界面。
+    setPanelOpen(false)
     await reloadActiveView()
   })
+
+  topbarToggle.addEventListener('click', () => {
+    setPanelOpen(!topbar.classList.contains('panel-open'))
+  })
+  // 常态收起（上次如果展开着，这次也展开）
+  setPanelOpen(localStorage.getItem(KEY_PANEL) === '1')
 
   addCategoryBtn.addEventListener('click', async () => {
     const name = await askText('新建大类目', { placeholder: '比如：数学、竞赛、英语' })

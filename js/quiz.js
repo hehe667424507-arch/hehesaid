@@ -375,14 +375,35 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
     } finally {
       busy = false
       backBtn.hidden = history.length === 0
-      // 记录成功后自动抽下一题，省掉一次点击。
+      // 记录成功后立刻抽下一题，中间不等待。
       if (recorded) {
         setTimeout(() => {
           if (root.offsetParent === null) return
           if (current) return
           drawNext()
-        }, 600)
+        }, 0)
       }
+    }
+  }
+
+  /** 从题库页「刷这题」直接开始这道题。 */
+  async function startWith(groupId) {
+    if (busy) return
+    try {
+      const group = await getGroup(groupId)
+      if (!group) {
+        toast('这道题已经不在了', 'info')
+        return
+      }
+      reviewing = false
+      setReviewMode(false)
+      lastPickedId = group.id
+      await showGroup(group)
+      hint.textContent = ''
+      backBtn.hidden = false
+      scroll.scrollTop = 0
+    } catch (error) {
+      toast(error.message || '打开失败', 'error')
     }
   }
 
@@ -417,6 +438,7 @@ export function createQuizView({ getCategoryId, getSubcategoryId, refreshStats, 
 
   return {
     el: root,
+    startWith,
     async onShow() {
       await refreshSubcategoryNames()
       // 切回来时保留正在做的那道题（连同是否已经展示解析）。

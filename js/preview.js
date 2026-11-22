@@ -1,114 +1,88 @@
-// 题目预览对话框：看题目图 + 全部解析图，可以改判，也可以把图片存到手机。
-// 题库页、今日记录都复用这一个。
+// 题目预览：叉固定在右上角，改判按钮固定在底部，中间图片可滚动、点开全屏。
+// 题库页（含「今天」和错题本）都复用这一个。
 
 import { el, toast } from './ui.js'
 import { createShot } from './viewer.js'
-import { getImageURL, getImageBlob } from './storage.js'
+import { openGallery } from './fullscreen.js'
+import { getImageURL } from './storage.js'
 import { STATUS, updateGroup } from './repo.js'
 
-function pad(n) {
-  return String(n).padStart(2, '0')
-}
-
-function fileName(base, index) {
-  const now = new Date()
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`
-  return `${base}-${stamp}${index ? '-' + index : ''}.jpg`
-}
-
-function saveBlob(blob, name) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = name
-  document.body.append(link)
-  link.click()
-  link.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 60_000)
-}
-
-async function saveImage(imageId, name) {
-  try {
-    const blob = await getImageBlob(imageId)
-    if (!blob) {
-      toast('这张图的文件找不到了', 'error')
-      return
-    }
-    saveBlob(blob, name)
-    toast('已保存到下载目录', 'ok')
-  } catch (error) {
-    toast(error.message || '保存失败', 'error')
-  }
-}
-
 /**
- * 打开预览。
  * options.onChanged: 改判成功后回调（用来刷新列表）
  * options.showRetag: 是否显示改判按钮，默认 true
+ * options.actions: 额外的底部按钮，如 [{ label, onClick }]
  */
-export async function openPreview(group, { onChanged, showRetag = true } = {}) {
+export async function openPreview(group, { onChanged, showRetag = true, actions = [] } = {}) {
   const dialogEl = el('dialog', { class: 'dlg dlg-preview' })
-  const content = el('div', { class: 'preview-body' })
-  const tempUrls = []
+  const body = el('div', { class: 'preview-body' })
   const retagRow = el('div', { class: 'retag-row' })
   let current = { ...group }
 
-  async function addImage(imageId, label, nameBase, index) {
+  const images = []
+  const shots = []
+
+  async function addImage(imageId, label) {
     const url = await getImageURL(imageId)
     if (!url) {
-      content.append(el('div', { class: 'missing-image', text: `${label} 图片丢失` }))
+      body.append(el('div', { class: 'missing-image', text: `${label} 图片丢失` }))
       return
     }
-    tempUrls.push(url)
-    const shot = createShot()
+    const index = images.length
+    images.push({ url, label })
+
+    const shot = createShot({ onTap: () => openGallery(images, index) })
     shot.setSrc(url)
+    shots.push(shot)
 
-    const head = el(
-      'div',
-      { class: 'shot-head' },
-      el('span', { class: 'shot-label', text: label }),
-      el('button', {
-        class: 'btn btn-sm',
-        text: '⬇ 保存图片',
-        onclick: () => saveImage(imageId, fileName(nameBase, index)),
-      }),
-    )
-
-    content.append(head, shot.el)
+    body.append(el('div', { class: 'shot-label', text: label }), shot.el)
   }
 
-  await addImage(current.questionImageId, '题目', '题目', 0)
+  await addImage(current.questionImageId, '题目')
   const ids = current.explanationImageIds || []
   for (const [index, id] of ids.entries()) {
-    await addImage(id, `解析 ${index + 1}`, '解析', index + 1)
+    await addImage(id, `解析 ${index + 1}`)
   }
-  if (!ids.length) content.append(el('div', { class: 'no-explanation', text: '本题没有解析图' }))
+  if (!ids.length) body.append(el('div', { class: 'no-explanation', text: '本题没有解析图' }))
+
+  function statusText() {
+    return current.status === STATUS.DONE ? '已做对' : current.status === STATUS.WRONG ? '错题' : '未看'
+  }
 
   function renderRetag() {
-    if (!showRetag) {
-      retagRow.replaceChildren()
-      return
+    const buttons = []
+    if (showRetag) {
+      buttons.push(
+        el('button', {
+          class: 'btn btn-sm btn-ok',
+          text: '做对',
+          onclick: () => retag('right'),
+        }),
+        el('button', {
+          class: 'btn btn-sm btn-warn',
+          text: '做错',
+          onclick: () => retag('wrong'),
+        }),
+        el('button', {
+          class: 'btn btn-sm',
+          text: '跳过',
+          onclick: () => retag('skip'),
+        }),
+      )
     }
-    const statusText =
-      current.status === STATUS.DONE ? '已做对' : current.status === STATUS.WRONG ? '错题' : '未看'
+    for (const action of actions) {
+      buttons.push(
+        el('button', {
+          class: 'btn btn-sm',
+          text: action.label,
+          onclick: () => action.onClick(current, () => dialogEl.close()),
+        }),
+      )
+    }
     retagRow.replaceChildren(
-      el('span', { class: 'retag-label', text: `当前：${statusText}` }),
-      el('button', {
-        class: 'btn btn-sm btn-ok',
-        text: '改判做对',
-        onclick: () => retag('right'),
-      }),
-      el('button', {
-        class: 'btn btn-sm btn-warn',
-        text: '改判做错',
-        onclick: () => retag('wrong'),
-      }),
-      el('button', {
-        class: 'btn btn-sm',
-        text: '改判跳过',
-        onclick: () => retag('skip'),
-      }),
+      el('span', { class: 'retag-label', text: `当前：${statusText()}` }),
+      ...buttons,
     )
+    retagRow.hidden = buttons.length === 0
   }
 
   async function retag(result) {
@@ -119,7 +93,8 @@ export async function openPreview(group, { onChanged, showRetag = true } = {}) {
         status,
         lastAt: Date.now(),
         lastResult: result,
-        // 改判不算又做了一次，所以不动 attempts。
+        // 改判不算又做了一次，attempts 不变；但记错次数要跟着变。
+        wrongCount: Math.max(0, (current.wrongCount || 0) + (result === 'wrong' ? 1 : 0)),
       })
       renderRetag()
       toast('已改判', 'ok')
@@ -131,28 +106,30 @@ export async function openPreview(group, { onChanged, showRetag = true } = {}) {
 
   renderRetag()
 
+  const closeButton = el('button', {
+    class: 'dlg-x',
+    text: '×',
+    title: '关闭',
+    onclick: () => dialogEl.close(),
+  })
+
   dialogEl.append(
     el(
       'div',
       { class: 'dlg-inner dlg-inner-preview' },
-      el(
-        'div',
-        { class: 'dlg-head' },
-        el('h2', { class: 'dlg-title', text: '题目预览' }),
-        el('button', {
-          class: 'btn btn-sm btn-ghost',
-          text: '关闭',
-          onclick: () => dialogEl.close(),
-        }),
-      ),
-      content,
+      el('div', { class: 'dlg-head' }, el('h2', { class: 'dlg-title', text: '题目预览' }), closeButton),
+      body,
       retagRow,
     ),
   )
 
   dialogEl.addEventListener('close', () => {
-    for (const url of tempUrls) URL.revokeObjectURL(url)
+    for (const shot of shots) shot.reset()
     dialogEl.remove()
+  })
+  dialogEl.addEventListener('cancel', (event) => {
+    event.preventDefault()
+    dialogEl.close()
   })
   document.body.append(dialogEl)
   dialogEl.showModal()

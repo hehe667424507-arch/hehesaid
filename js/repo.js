@@ -280,6 +280,8 @@ export async function recordResult(group, result) {
     attempts: (group.attempts || 0) + 1,
     lastAt: Date.now(),
     lastResult: result,
+    // 单独记"错了几次"，错题本里按这个排序和显示。
+    wrongCount: (group.wrongCount || 0) + (result === 'wrong' ? 1 : 0),
   })
 }
 

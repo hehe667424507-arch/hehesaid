@@ -41,14 +41,19 @@
 
     <div id="app">
       <header id="topbar">
-        <div class="topbar-row">
-          <select id="categorySelect" class="pick" aria-label="大类目"></select>
-          <select id="subcategorySelect" class="pick" aria-label="小类目"></select>
-          <button id="btnAddCategory" class="btn btn-sm btn-icon" type="button" title="新建大类目">
-            ＋
-          </button>
+        <button id="topbarToggle" class="topbar-summary" type="button">
+          <span id="topbarTitle" class="topbar-title">类目</span>
+          <span class="topbar-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="topbarPanel" class="topbar-panel">
+          <div class="topbar-row">
+            <select id="categorySelect" class="pick" aria-label="大类目"></select>
+            <select id="subcategorySelect" class="pick" aria-label="小类目"></select>
+            <button id="btnAddCategory" class="btn btn-sm btn-icon" type="button" title="新建大类目">
+              ＋
+            </button>
+          </div>
         </div>
-        <div id="stats" class="stats"></div>
       </header>
 
       <main id="main">

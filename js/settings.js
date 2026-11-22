@@ -2,7 +2,17 @@
 
 import { el, toast, dialog, confirmDialog, askText, formatBytes } from './ui.js'
 import { PRESETS } from './image.js'
-import { getSettings, saveSettings } from './repo.js'
+import {
+  getSettings,
+  saveSettings,
+  categoryStats,
+  listCategories,
+  listSubcategories,
+  listGroups,
+  resetCategory,
+  STATUS,
+} from './repo.js'
+import { getAll } from './db.js'
 import { initStorage, storageModeLabel, imageBytesTotal } from './storage.js'
 import { exportBackup, importBackup } from './backup.js'
 
@@ -11,6 +21,8 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
 
   const qualityBox = el('div', { class: 'seg seg-wide' })
   const storageBox = el('div', { class: 'kv-list' })
+  const statsBox = el('div', { class: 'kv-list' })
+  const distBox = el('div', { class: 'dist-list' })
   const categoriesBox = el('div', { class: 'kv-list' })
   const exportStatus = el('div', { class: 'hint', text: '' })
   const importStatus = el('div', { class: 'hint', text: '' })
@@ -30,6 +42,37 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
         text: '只影响之后新导入的图片，已经录入的图片不会变。',
       }),
       qualityBox,
+    ),
+    el(
+      'section',
+      { class: 'card' },
+      el('h2', { class: 'card-title', text: '统计' }),
+      statsBox,
+      distBox,
+      el('button', {
+        class: 'btn btn-sm btn-danger-ghost',
+        text: '重置当前范围进度',
+        style: { marginTop: '10px' },
+        onclick: async () => {
+          const app = window.__quizApp
+          const categoryId = app?.currentCategoryId
+          if (!categoryId) {
+            toast('还没有大类目', 'info')
+            return
+          }
+          const subId = app.currentSubcategoryId || ''
+          const stats = await categoryStats(categoryId, subId)
+          const ok = await confirmDialog(
+            `把当前范围内全部 ${stats.total} 道题都重置为未看？做题次数会清零，题目和图片不会删除。`,
+            { title: '重置进度', okText: '全部重置', danger: true },
+          )
+          if (!ok) return
+          const count = await resetCategory(categoryId, subId)
+          toast(`已重置 ${count} 道题`, 'ok')
+          await renderStats()
+          await refreshAll?.()
+        },
+      }),
     ),
     el(
       'section',
@@ -100,6 +143,75 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
           },
           el('span', { class: 'seg-main', text: preset.label }),
           el('span', { class: 'seg-sub', text: preset.hint }),
+        ),
+      ),
+    )
+  }
+
+  function kv(label, value) {
+    return el('div', { class: 'kv' }, el('span', { text: label }), el('b', { text: value }))
+  }
+
+  async function renderStats() {
+    const app = window.__quizApp
+    if (!app) return
+    const categoryId = app.currentCategoryId
+    if (!categoryId) {
+      statsBox.replaceChildren(el('div', { class: 'hint', text: '还没有大类目' }))
+      distBox.replaceChildren()
+      return
+    }
+
+    const subId = app.currentSubcategoryId || ''
+    const [stats, subs, allGroups, categoryGroups, bytes, images, categories] = await Promise.all([
+      categoryStats(categoryId, subId),
+      listSubcategories(categoryId),
+      getAll('groups'),
+      listGroups(categoryId),
+      imageBytesTotal(),
+      getAll('images'),
+      listCategories(),
+    ])
+
+    const catName = categories.find((c) => c.id === categoryId)?.name || '—'
+    const subName = subId ? subs.find((s) => s.id === subId)?.name || '—' : '全部小类目'
+
+    const since = new Date()
+    since.setHours(0, 0, 0, 0)
+    const todayCount = allGroups.filter((group) => (group.lastAt || 0) >= since.getTime()).length
+    const attempts = categoryGroups.reduce((sum, group) => sum + (group.attempts || 0), 0)
+    const avg = categoryGroups.length ? (attempts / categoryGroups.length).toFixed(1) : '0'
+
+    statsBox.replaceChildren(
+      kv('当前范围', `${catName} · ${subName}`),
+      kv('共', `${stats.total} 题`),
+      kv('未看 / 错题 / 已做对', `${stats.new} / ${stats.wrong} / ${stats.done}`),
+      kv('累计作答', `${attempts} 次（平均每题 ${avg} 次）`),
+      kv('今天做了', `${todayCount} 题`),
+      kv('图片', `${images.length} 张 · ${formatBytes(bytes)}`),
+    )
+
+    const rows = subs.map((sub) => {
+      const list = categoryGroups.filter((group) => group.subcategoryId === sub.id)
+      const wrong = list.filter((group) => group.status === STATUS.WRONG).length
+      return { name: sub.name, count: list.length, wrong }
+    })
+    const max = Math.max(1, ...rows.map((row) => row.count))
+    distBox.replaceChildren(
+      ...rows.map((row) =>
+        el(
+          'div',
+          { class: 'dist-row' },
+          el('span', { class: 'dist-name', text: row.name }),
+          el(
+            'div',
+            { class: 'dist-bar' },
+            el('div', { class: 'dist-fill', style: { width: `${(row.count / max) * 100}%` } }),
+          ),
+          el('span', {
+            class: 'dist-num',
+            text: `${row.count} 题${row.wrong ? ` · 错 ${row.wrong}` : ''}`,
+          }),
         ),
       ),
     )
@@ -339,11 +451,13 @@ export function createSettingsView({ refreshAll, onDataChanged }) {
       const settings = await getSettings()
       renderQuality(settings)
       await initStorage()
+      await renderStats()
       await renderStorage()
       await renderCategories()
       renderInstall()
     },
     async reload() {
+      await renderStats()
       await renderStorage()
       await renderCategories()
     },

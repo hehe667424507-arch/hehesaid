@@ -28,7 +28,7 @@ export function openGallery(images, startIndex = 0) {
 
   const shots = []
   for (const item of list) {
-    const shot = createShot()
+    const shot = createShot({ horizontalPan: true })
     shot.setSrc(item.url)
     shots.push(shot)
 

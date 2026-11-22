@@ -1,23 +1,17 @@
-// 录入页：① 逐题确认录入（支持拍照 + 裁剪 + 涂抹）  ② 批量选图后手动分题（点选方式）。
-// 两种入口都要先选一个小类目，题目会挂在这个小类目下。
+// 录入页：① 逐题确认录入（拍照 / 裁剪 / 涂抹）  ② 批量选图后点选分题。
+// 小类目直接用顶部选择的那一个，页面里不再单独放一个选择条。
 
-import { el, toast, confirmDialog, askText } from './ui.js'
+import { el, toast, confirmDialog } from './ui.js'
 import { PRESETS, compressImage, BIG_FILE_BYTES } from './image.js'
 import {
   createGroup,
-  createSubcategory,
   deleteGroup,
   getSettings,
-  listGroups,
-  listSubcategories,
   saveImageBlob,
 } from './repo.js'
 import { deleteImage } from './storage.js'
 import { openCropper } from './crop.js'
 import { openDoodle } from './doodle.js'
-
-const NOTICE =
-  '请先在手机相册中裁剪好题目图和解析图，再分别选择；本应用不做自动切题和文字识别。也可以直接「拍照」，拍完在裁剪框里框出题目区域。'
 
 export function createIngestView({
   getCategoryId,
@@ -29,28 +23,40 @@ export function createIngestView({
   setSubcategoryId,
 }) {
   let mode = 'one'
-  let subcategories = []
-  let selectedSubcategoryId = ''
   let savedCount = 0
 
-  const subChips = el('div', { class: 'chips' })
-  const subBar = el(
-    'div',
-    { class: 'sub-bar' },
-    el('span', { class: 'sub-bar-label', text: '录到' }),
-    subChips,
-  )
-
+  const promptRow = el('div', { class: 'ingest-prompt', hidden: true })
   const body = el('div', { class: 'ingest-body' })
 
   const tabOne = el('button', { class: 'seg-btn active', text: '逐题录入', onclick: () => switchMode('one') })
   const tabBatch = el('button', { class: 'seg-btn', text: '批量分题', onclick: () => switchMode('batch') })
   const tabs = el('div', { class: 'seg' }, tabOne, tabBatch)
 
-  const root = el('div', { class: 'ingest' }, el('div', { class: 'notice', text: NOTICE }), subBar, tabs, body)
+  const root = el('div', { class: 'ingest' }, promptRow, tabs, body)
 
   let viewOne = null
   let viewBatch = null
+
+  function currentSub() {
+    return getSubcategoryId() || ''
+  }
+
+  function updatePrompt() {
+    const missing = !currentSub()
+    promptRow.hidden = !missing
+    if (missing) {
+      promptRow.replaceChildren(
+        el('span', { text: '先在顶部选一个小类目，再开始录入。' }),
+        el('button', {
+          class: 'btn btn-sm',
+          text: '去选',
+          onclick: () => {
+            document.getElementById('topbarToggle')?.click()
+          },
+        }),
+      )
+    }
+  }
 
   function switchMode(next) {
     mode = next
@@ -73,92 +79,8 @@ export function createIngestView({
   }
 
   async function loadSubcategories() {
-    const categoryId = getCategoryId()
-    subcategories = categoryId ? await listSubcategories(categoryId) : []
-    const preferred = getSubcategoryId()
-    const exists = subcategories.some((row) => row.id === selectedSubcategoryId)
-    if (!exists) {
-      selectedSubcategoryId = subcategories.some((row) => row.id === preferred)
-        ? preferred
-        : subcategories[0]
-          ? subcategories[0].id
-          : ''
-    }
-    renderSubBar()
-  }
-
-  function renderSubBar() {
-    if (!subcategories.length) {
-      const input = el('input', {
-        class: 'input input-inline',
-        type: 'text',
-        placeholder: '比如：第一章 极限',
-        maxlength: '30',
-      })
-      const button = el('button', {
-        class: 'btn btn-sm btn-primary',
-        text: '创建',
-        onclick: async () => {
-          try {
-            const sub = await createSubcategory(getCategoryId(), input.value)
-            selectedSubcategoryId = sub.id
-            await loadSubcategories()
-            await refreshSubcategories?.()
-            await setSubcategoryId?.(sub.id)
-            toast(`已创建小类目「${sub.name}」`, 'ok')
-          } catch (error) {
-            toast(error.message || '创建失败', 'error')
-          }
-        },
-      })
-      input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') button.click()
-      })
-      subChips.replaceChildren(
-        el(
-          'div',
-          { class: 'no-sub' },
-          el('span', { class: 'no-sub-text', text: '这个大类目还没有小类目，先建一个：' }),
-          el('div', { class: 'no-sub-create' }, input, button),
-        ),
-      )
-      return
-    }
-
-    subChips.replaceChildren(
-      ...subcategories.map((row) =>
-        el('button', {
-          class: `chip ${row.id === selectedSubcategoryId ? 'active' : ''}`,
-          text: row.name,
-          onclick: async () => {
-            selectedSubcategoryId = row.id
-            renderSubBar()
-            // 顶部的「看哪个范围」跟着一起走，录完切到刷题就是这个小类目。
-            await setSubcategoryId?.(row.id)
-          },
-        }),
-      ),
-      el('button', {
-        class: 'chip chip-add',
-        text: '＋ 小类目',
-        onclick: async () => {
-          const name = await askText('新建小类目', {
-            placeholder: '比如：第一章 极限、第二章 导数',
-          })
-          if (!name) return
-          try {
-            const sub = await createSubcategory(getCategoryId(), name)
-            selectedSubcategoryId = sub.id
-            await loadSubcategories()
-            await refreshSubcategories?.()
-            await setSubcategoryId?.(sub.id)
-            toast(`已创建「${sub.name}」`, 'ok')
-          } catch (error) {
-            toast(error.message || '创建失败', 'error')
-          }
-        },
-      }),
-    )
+    // 小类目从顶部选择来，这里只需要判断"有没有选"。
+    updatePrompt()
   }
 
   // ———————————————— 共用：保存一组题 ————————————————
@@ -175,8 +97,10 @@ export function createIngestView({
 
   async function persistGroup(questionFile, explanationFiles, onProgress = () => {}) {
     const categoryId = getCategoryId()
+    const subcategoryId = currentSub()
     if (!categoryId) throw new Error('请先在顶部选择大类目')
-    if (!selectedSubcategoryId) throw new Error('请先选择小类目')
+    if (!subcategoryId) throw new Error('请先在顶部选择一个小类目')
+
     const settings = await getSettings()
     const preset = settings.quality
     const total = 1 + explanationFiles.length
@@ -203,13 +127,12 @@ export function createIngestView({
         explanationIds.push(saved.id)
       }
 
-      const group = await createGroup({
+      return await createGroup({
         categoryId,
-        subcategoryId: selectedSubcategoryId,
+        subcategoryId,
         questionImageId: savedIds[0],
         explanationImageIds: explanationIds,
       })
-      return group
     } catch (error) {
       for (const id of savedIds) {
         try {
@@ -254,7 +177,6 @@ export function createIngestView({
   function buildEntryOne() {
     let question = null
     let explanations = []
-    let lastGroup = null
 
     const qThumbs = el('div', { class: 'thumbs' })
     const eThumbs = el('div', { class: 'thumbs' })
@@ -332,8 +254,8 @@ export function createIngestView({
         toast('请先在顶部选择大类目', 'error')
         return
       }
-      if (!selectedSubcategoryId) {
-        toast('请先选择小类目（上面的「录到」）', 'error')
+      if (!currentSub()) {
+        toast('请先在顶部选择一个小类目', 'error')
         return
       }
       if (!question) {
@@ -342,10 +264,9 @@ export function createIngestView({
       }
       saveBtn.disabled = true
       try {
-        const group = await persistGroup(question.file, explanations.map((row) => row.file), (text) => {
+        await persistGroup(question.file, explanations.map((row) => row.file), (text) => {
           status.textContent = text
         })
-        lastGroup = group
         savedCount += 1
         URL.revokeObjectURL(question.url)
         question = null
@@ -478,12 +399,7 @@ export function createIngestView({
     }
 
     async function refreshCounter() {
-      const categoryId = getCategoryId()
-      const all = categoryId ? await listGroups(categoryId) : []
-      const mine = selectedSubcategoryId
-        ? all.filter((group) => group.subcategoryId === selectedSubcategoryId).length
-        : 0
-      counter.textContent = `本次已录入 ${savedCount} 题 · 当前小类目 ${mine} 题 · 大类目共 ${all.length} 题`
+      counter.textContent = `已录 ${savedCount} 题`
     }
 
     const el_ = el(
@@ -499,7 +415,7 @@ export function createIngestView({
         el(
           'div',
           { class: 'pick-head' },
-          el('span', { class: 'pick-title', text: '① 题目图（1 张）' }),
+          el('span', { class: 'pick-title', text: '① 题目图' }),
           el(
             'div',
             { class: 'row row-tight' },
@@ -515,7 +431,7 @@ export function createIngestView({
         el(
           'div',
           { class: 'pick-head' },
-          el('span', { class: 'pick-title', text: '② 解析图（0 张或多张，按顺序）' }),
+          el('span', { class: 'pick-title', text: '② 解析图' }),
           el(
             'div',
             { class: 'row row-tight' },
@@ -528,45 +444,6 @@ export function createIngestView({
       saveBtn,
       status,
       counter,
-      el(
-        'div',
-        { class: 'row' },
-        el('button', {
-          class: 'btn',
-          text: '删除刚录入的题',
-          onclick: async () => {
-            if (!lastGroup) {
-              toast('还没有刚录入的题', 'info')
-              return
-            }
-            const ok = await confirmDialog('删除刚刚录入的那道题？图片也会一起删除。', {
-              title: '删除题目',
-              okText: '删除',
-              danger: true,
-            })
-            if (!ok) return
-            try {
-              await deleteGroup(lastGroup.id)
-              lastGroup = null
-              savedCount = Math.max(0, savedCount - 1)
-              toast('已删除', 'ok')
-              await refreshCounter()
-              await refreshStats()
-              await onDataChanged?.()
-            } catch (error) {
-              toast(error.message || '删除失败', 'error')
-            }
-          },
-        }),
-        el('button', {
-          class: 'btn btn-ghost',
-          text: '结束录入',
-          onclick: () => {
-            if (savedCount > 0) toast(`本次共录入 ${savedCount} 题`, 'ok')
-            goQuiz?.()
-          },
-        }),
-      ),
     )
 
     renderThumbs()
@@ -581,7 +458,7 @@ export function createIngestView({
     }
   }
 
-  // ———————————————— 入口 B：批量选图手动分题（点选方式） ————————————————
+  // ———————————————— 入口 B：批量选图手动分题 ————————————————
 
   function buildEntryBatch() {
     /** items: { file, url, role: 'none'|'question'|'explanation', groupNo, saved } */
@@ -591,6 +468,9 @@ export function createIngestView({
     let current = { question: null, explanations: [] }
     let savedGroups = []
     let saving = false
+    let swipe = null
+
+    const nodeByItem = new WeakMap()
 
     const strip = el('div', { class: 'batch-strip' })
     const status = el('div', { class: 'ingest-status', text: '' })
@@ -614,9 +494,25 @@ export function createIngestView({
     const btnCancel = el('button', { class: 'btn', text: '取消当前组' })
     const btnDropSaved = el('button', { class: 'btn btn-danger-ghost', text: '删除刚保存的组' })
 
+    const assignRow = el('div', { class: 'batch-assign' }, btnQuestion, btnExplain, btnDelete)
+    const actionsRow = el('div', { class: 'row' }, btnCancel, btnDropSaved)
+
     function clearSelection() {
       selected.clear()
       selectOrder = []
+    }
+
+    function setSelected(item, on) {
+      if (item.saved) return
+      if (on) {
+        selected.add(item)
+        if (!selectOrder.includes(item)) selectOrder.push(item)
+      } else {
+        selected.delete(item)
+        selectOrder = selectOrder.filter((row) => row !== item)
+      }
+      const node = nodeByItem.get(item)
+      if (node) node.classList.toggle('selected', selected.has(item))
     }
 
     function toggle(item) {
@@ -624,13 +520,7 @@ export function createIngestView({
         toast('这张已经保存到题库了，不能在这里改', 'info')
         return
       }
-      if (selected.has(item)) {
-        selected.delete(item)
-        selectOrder = selectOrder.filter((row) => row !== item)
-      } else {
-        selected.add(item)
-        selectOrder.push(item)
-      }
+      setSelected(item, !selected.has(item))
       renderStrip()
     }
 
@@ -641,6 +531,10 @@ export function createIngestView({
       btnFinish.disabled = !current.question
       btnCancel.disabled = !current.question && current.explanations.length === 0
       btnDropSaved.disabled = savedGroups.length === 0
+      const empty = items.length === 0
+      assignRow.hidden = empty
+      btnFinish.hidden = empty
+      actionsRow.hidden = empty
     }
 
     function updateInfo() {
@@ -655,9 +549,7 @@ export function createIngestView({
       if (current.explanations.length) parts.push(`解析 ${current.explanations.length} 张`)
       const done = items.filter((item) => item.saved).length
       if (done) parts.push(`已保存 ${done} 张`)
-      info.textContent = parts.length
-        ? `共 ${total} 张 · ${parts.join(' · ')}`
-        : `共 ${total} 张 · 点图片选中，再用下面的按钮分配`
+      info.textContent = parts.length ? `${total} 张 · ${parts.join(' · ')}` : `${total} 张 · 点选分配`
     }
 
     function roleLabel(item) {
@@ -672,8 +564,8 @@ export function createIngestView({
 
     function renderStrip() {
       strip.replaceChildren(
-        ...items.map((item) =>
-          el(
+        ...items.map((item) => {
+          const node = el(
             'div',
             {
               class: `batch-item ${item.role !== 'none' || item.saved ? 'set' : ''} ${
@@ -704,12 +596,59 @@ export function createIngestView({
               class: `batch-badge ${item.role}`,
               text: roleLabel(item) || String(items.indexOf(item) + 1),
             }),
-          ),
-        ),
+          )
+          nodeByItem.set(item, node)
+          node.__batchItem = item
+          return node
+        }),
       )
       updateButtons()
       updateInfo()
     }
+
+    // —— 横滑选择：竖向滑动不处理，交给页面滚动 ——
+    strip.addEventListener('pointerdown', (event) => {
+      const node = event.target.closest('.batch-item')
+      const item = node ? node.__batchItem : null
+      if (!item) return
+      swipe = {
+        startX: event.clientX,
+        startY: event.clientY,
+        mode: 'pending',
+        anchor: item,
+        select: !selected.has(item),
+      }
+    })
+
+    strip.addEventListener('pointermove', (event) => {
+      if (!swipe) return
+      if (swipe.mode === 'pending') {
+        const dx = event.clientX - swipe.startX
+        const dy = event.clientY - swipe.startY
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return
+        if (Math.abs(dx) <= Math.abs(dy)) {
+          // 竖着滑：这是滚页面，不插手
+          swipe = null
+          return
+        }
+        swipe.mode = 'h'
+        setSelected(swipe.anchor, swipe.select)
+      }
+      if (swipe.mode === 'h') {
+        const under = document.elementFromPoint(event.clientX, event.clientY)
+        const target = under && under.closest ? under.closest('.batch-item') : null
+        if (target && target.__batchItem) setSelected(target.__batchItem, swipe.select)
+      }
+    })
+
+    const endSwipe = () => {
+      if (!swipe) return
+      const wasSwiping = swipe.mode === 'h'
+      swipe = null
+      if (wasSwiping) renderStrip()
+    }
+    strip.addEventListener('pointerup', endSwipe)
+    strip.addEventListener('pointercancel', endSwipe)
 
     function resetCurrent() {
       for (const item of [current.question, ...current.explanations]) {
@@ -896,7 +835,7 @@ export function createIngestView({
       el(
         'div',
         { class: 'pick-head' },
-        el('span', { class: 'pick-title', text: '② 一次选择一批图片' }),
+        el('span', { class: 'pick-title', text: '一次选择一批图片' }),
         el('button', {
           class: 'btn btn-sm',
           text: items.length ? '再选一批' : '选择一批图片',
@@ -905,10 +844,10 @@ export function createIngestView({
       ),
       strip,
       info,
-      el('div', { class: 'batch-assign' }, btnQuestion, btnExplain, btnDelete),
+      assignRow,
       btnFinish,
       status,
-      el('div', { class: 'row' }, btnCancel, btnDropSaved),
+      actionsRow,
     )
 
     renderStrip()
@@ -930,6 +869,7 @@ export function createIngestView({
     async reload() {
       await loadSubcategories()
       if (viewOne) viewOne.refresh()
+      if (viewBatch) viewBatch.refresh()
     },
   }
 }

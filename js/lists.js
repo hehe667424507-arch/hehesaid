@@ -33,8 +33,15 @@ function timeOf(ms) {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
-export function createListsView({ getCategoryId, getSubcategoryId, refreshStats, onDataChanged }) {
+export function createListsView({
+  getCategoryId,
+  getSubcategoryId,
+  refreshStats,
+  onDataChanged,
+  onStartQuiz,
+}) {
   let activeTab = 'new'
+  let todayWrongOnly = false
   let groups = []
   let todayGroups = []
   let subcategoryNames = new Map()
@@ -42,10 +49,10 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
   const pending = new WeakMap()
 
   const tabBar = el('div', { class: 'seg seg-4' })
+  const todayFilter = el('div', { class: 'today-filter', hidden: true })
   const listBox = el('div', { class: 'list-box' })
-  const summary = el('div', { class: 'list-summary' })
 
-  const root = el('div', { class: 'lists' }, summary, tabBar, listBox)
+  const root = el('div', { class: 'lists' }, tabBar, todayFilter, listBox)
 
   function ensureObserver() {
     if (observer) return observer
@@ -94,19 +101,68 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
             if (activeTab === tab.key) return
             activeTab = tab.key
             renderTabs()
+            renderTodayFilter()
             renderList()
-            renderSummary()
           },
         })
       }),
     )
   }
 
+  function renderTodayFilter() {
+    const show = activeTab === 'today'
+    todayFilter.hidden = !show
+    if (!show) {
+      todayFilter.replaceChildren()
+      return
+    }
+    todayFilter.replaceChildren(
+      el('button', {
+        class: `chip ${todayWrongOnly ? 'active' : ''}`,
+        text: '只看今天做错的',
+        onclick: () => {
+          todayWrongOnly = !todayWrongOnly
+          renderTodayFilter()
+          renderList()
+        },
+      }),
+    )
+  }
+
   function openItem(group) {
     return openPreview(group, {
-      onChanged: async () => {
-        await refreshAll()
-      },
+      onChanged: () => refreshAll(),
+      actions: [
+        {
+          label: '重置',
+          onClick: async (current, close) => {
+            const ok = await confirmDialog('把这道题重置为「未看」，次数清零？', {
+              title: '重置单题',
+              okText: '重置',
+            })
+            if (!ok) return
+            await resetGroup(current.id)
+            toast('已重置', 'ok')
+            close()
+            await refreshAll()
+          },
+        },
+        {
+          label: '删除',
+          onClick: async (current, close) => {
+            const ok = await confirmDialog('删除这道题？题目图和解析图会一起删掉，不能恢复。', {
+              title: '删除题目',
+              okText: '删除',
+              danger: true,
+            })
+            if (!ok) return
+            await deleteGroup(current.id)
+            toast('已删除', 'ok')
+            close()
+            await refreshAll()
+          },
+        },
+      ],
     })
   }
 
@@ -146,7 +202,9 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
         el('div', { class: 'list-title', text: subName }),
         el('div', {
           class: 'list-meta',
-          text: `解析 ${explanationCount} 张 · 做过 ${group.attempts || 0} 次`,
+          text: `解析 ${explanationCount} 张 · 做过 ${group.attempts || 0} 次${
+            group.wrongCount ? ` · 错 ${group.wrongCount} 次` : ''
+          }`,
         }),
         el('div', {
           class: 'list-sub',
@@ -160,36 +218,10 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
         { class: 'list-actions' },
         el('button', {
           class: 'btn btn-sm',
-          text: '预览',
-          onclick: () => openItem(group),
-        }),
-        el('button', {
-          class: 'btn btn-sm',
-          text: '重置',
-          onclick: async () => {
-            const ok = await confirmDialog('把这道题重置为「未看」，次数清零？', {
-              title: '重置单题',
-              okText: '重置',
-            })
-            if (!ok) return
-            await resetGroup(group.id)
-            toast('已重置', 'ok')
-            await refreshAll()
-          },
-        }),
-        el('button', {
-          class: 'btn btn-sm btn-danger-ghost',
-          text: '删除',
-          onclick: async () => {
-            const ok = await confirmDialog('删除这道题？题目图和解析图会一起删掉，不能恢复。', {
-              title: '删除题目',
-              okText: '删除',
-              danger: true,
-            })
-            if (!ok) return
-            await deleteGroup(group.id)
-            toast('已删除', 'ok')
-            await refreshAll()
+          text: '刷这题',
+          onclick: (event) => {
+            event.stopPropagation()
+            onStartQuiz?.(group)
           },
         }),
       ),
@@ -215,15 +247,22 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
 
   function renderList() {
     if (activeTab === 'today') {
-      if (!todayGroups.length) {
+      const list = todayWrongOnly
+        ? todayGroups.filter((group) => group.lastResult === 'wrong')
+        : todayGroups
+      if (!list.length) {
         listBox.replaceChildren(emptyState())
         return
       }
-      listBox.replaceChildren(...todayGroups.map((group) => todayItemFor(group)))
+      listBox.replaceChildren(...list.map((group) => todayItemFor(group)))
       return
     }
 
     const filtered = groups.filter((group) => group.status === activeTab)
+    // 错题本：最近做错的排前面，最该复习的先看到。
+    if (activeTab === 'wrong') {
+      filtered.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))
+    }
     if (!filtered.length) {
       listBox.replaceChildren(emptyState())
       return
@@ -233,71 +272,27 @@ export function createListsView({ getCategoryId, getSubcategoryId, refreshStats,
 
   async function refreshAll() {
     const categoryId = getCategoryId()
-    const [rangeGroups, categoryGroups, subs] = await Promise.all([
+    const [rangeGroups, subs] = await Promise.all([
       categoryId ? listGroups(categoryId, getSubcategoryId()) : Promise.resolve([]),
-      categoryId ? listGroups(categoryId) : Promise.resolve([]),
       categoryId ? listSubcategories(categoryId) : Promise.resolve([]),
     ])
 
     groups = rangeGroups
     subcategoryNames = new Map(subs.map((row) => [row.id, row.name]))
 
-    // 「今天」看整个大类目，不受小类目筛选影响。
+    // 「今天」跟着当前小类目走，和上面的统计保持一致。
     const since = startOfToday()
-    todayGroups = categoryGroups
+    todayGroups = rangeGroups
       .filter((group) => (group.lastAt || 0) >= since)
       .sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0))
 
     renderTabs()
+    renderTodayFilter()
     renderList()
-    await renderSummary()
     await refreshStats()
     await onDataChanged?.()
   }
 
-  async function renderSummary() {
-    const categoryId = getCategoryId()
-    if (!categoryId) {
-      summary.replaceChildren()
-      return
-    }
-
-    if (activeTab === 'today') {
-      const right = todayGroups.filter((group) => group.lastResult === 'right').length
-      const wrong = todayGroups.filter((group) => group.lastResult === 'wrong').length
-      const skipped = todayGroups.filter((group) => group.lastResult === 'skip').length
-      summary.replaceChildren(
-        el('span', {
-          text: todayGroups.length
-            ? `今天做了 ${todayGroups.length} 题 · 做对 ${right} · 做错 ${wrong} · 跳过 ${skipped}`
-            : '今天还没有记录',
-        }),
-      )
-      return
-    }
-
-    const attempts = groups.reduce((sum, group) => sum + (group.attempts || 0), 0)
-    const scope = getSubcategoryId()
-      ? `小类目「${subcategoryNames.get(getSubcategoryId()) || '?'}」`
-      : '整个大类目'
-    summary.replaceChildren(
-      el('span', { text: `${scope} · ${groups.length} 题 · 累计作答 ${attempts} 次` }),
-      el('button', {
-        class: 'btn btn-sm btn-danger-ghost',
-        text: '重置当前范围进度',
-        onclick: async () => {
-          const ok = await confirmDialog(
-            `把${scope}下全部 ${groups.length} 道题都重置为未看？做题次数会清零，题目和图片不会删除。`,
-            { title: '重置进度', okText: '全部重置', danger: true },
-          )
-          if (!ok) return
-          const count = await resetCategory(categoryId, getSubcategoryId())
-          toast(`已重置 ${count} 道题`, 'ok')
-          await refreshAll()
-        },
-      }),
-    )
-  }
 
   return {
     el: root,

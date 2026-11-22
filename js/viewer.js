@@ -22,7 +22,7 @@ function midpoint(a, b) {
  * options.onTap: 单击（不是双击、不是在拖动）时调用，用来打开全屏。
  * 用法：const shot = createShot(); container.append(shot.el); shot.setSrc(url)
  */
-export function createShot({ onTap } = {}) {
+export function createShot({ onTap, horizontalPan = false } = {}) {
   const img = document.createElement('img')
   img.className = 'shot-img'
   img.alt = ''
@@ -100,7 +100,12 @@ export function createShot({ onTap } = {}) {
 
   function updateTouchAction() {
     // 放大后单指拖动用于移动图片；未放大时把滚动交还给页面。
-    box.style.touchAction = state.scale > 1 ? 'none' : 'pan-y'
+    // horizontalPan=true 时（全屏看图）额外放行左右滑动，让外层能翻页。
+    if (state.scale > 1) {
+      box.style.touchAction = 'none'
+    } else {
+      box.style.touchAction = horizontalPan ? 'pan-x pan-y' : 'pan-y'
+    }
   }
 
   function reset() {
